@@ -17,7 +17,7 @@ namespace UAFGJ
         {
             if (args.Length < 2)
             {
-                DisplayStr("Not enough arguments!");
+                DebugStr("Not enough arguments!");
                 return;
             }
 
@@ -26,71 +26,63 @@ namespace UAFGJ
 
             if (!File.Exists(ab))
             {
-                DisplayStr(".ab file not found!");
+                DebugStr(".ab file not found!");
                 return;
             }
 
             if (!File.Exists(png))
             {
-                DisplayStr(".png file not found!");
+                DebugStr(".png file not found!");
                 return;
             }
 
             DoStuff(ab, png);
         }
 
+        static private void DebugStr(string s)
+        {
+            //Console.WriteLine(s);
+        }
+
         static private void DisplayStr(string s)
         {
-            //DisplayStr(s);
+            Console.WriteLine(s);
         }
 
         static private void DoStuff(string ab, string png)
         {
             string ab_real_name = ab;
-            string ab_fake_name = ab_real_name + "_temp";
-            DisplayStr("Opening file: " + ab);
+
+            DebugStr("Opening file: " + ab);
             DetectedFileType file_type = AssetBundleDetector.DetectFileType(ab);
-            DisplayStr("Detected file type: " + file_type.ToString());
+            DebugStr("Detected file type: " + file_type.ToString());
             if (file_type != DetectedFileType.BundleFile)
             {
-                DisplayStr("Invalid file type: " + file_type.ToString());
+                DisplayStr("Invalid file type for " + ab + ": " + file_type.ToString());
                 return;
             }
 
             AssetsManager am = new AssetsManager();
 
-            BundleFileInstance bundleInst = am.LoadBundleFile(ab, true);
-            DisplayStr("Loaded bundleInst");
-
-            string assetfile_name = "";
-            int cont = 0;
-            foreach (var i in bundleInst.file.bundleInf6.dirInf)
+            BundleFileInstance bundleInst = GetBundleInst(am, ab);
+            if(bundleInst == null)
             {
-                DisplayStr("Found asset file: " + i.name);
-                if(!i.name.Contains(".resS"))
-                {
-                    assetfile_name = i.name;
-                }
-                cont++;
-            }
-
-            if (cont > 2)
-            {
-                DisplayStr("More than 2 assets file found!");
-            }
-
-            DisplayStr("Loading assetInst for " + assetfile_name);
-            AssetsFileInstance assetInst = am.LoadAssetsFileFromBundle(bundleInst, 0, true);
-            if (assetInst == null)
-            {
-                DisplayStr("Could not load assetInst for " + assetfile_name);
                 return;
             }
-            else
+
+            string assetfile_name = GetRightAssetFileName(bundleInst, ab);
+            if (string.IsNullOrEmpty(assetfile_name))
             {
-                DisplayStr("Loaded assetInst for " + assetfile_name);
+                return;
             }
 
+            AssetsFileInstance assetInst = GetAssetInst(am, bundleInst, assetfile_name, ab);
+            if(assetInst == null)
+            {
+                return;
+            }
+
+            // Load classdata.tpk
             if(!File.Exists("classdata.tpk"))
             {
                 DisplayStr("classdata.tpk not found!");
@@ -102,13 +94,13 @@ namespace UAFGJ
             {
                 am.LoadClassDatabaseFromPackage(assetInst.file.typeTree.unityVersion);
             }
-            DisplayStr("Loaded classdata.tpk");
+            DebugStr("Loaded classdata.tpk");
 
             AssetTypeValueField atvf = new AssetTypeValueField(); // "baseField"
             AssetFileInfoEx afie = new AssetFileInfoEx();
             int selected = -1;
             string png_noext = png;
-            cont = 0;
+            int cont = 0;
 
             // Iterate the files in assetInst
             foreach (var inf in assetInst.table.GetAssetsOfType((int)AssetClassID.Texture2D))
@@ -117,7 +109,7 @@ namespace UAFGJ
                 atvf = am.GetTypeInstance(assetInst, afie).GetBaseField();
 
                 var name = atvf.Get("m_Name").GetValue().AsString();
-                DisplayStr(name);
+                DebugStr(name);
 
                 png_noext = Path.GetFileNameWithoutExtension(png);
                 png_noext = png_noext.ToLowerInvariant();
@@ -132,7 +124,7 @@ namespace UAFGJ
             // Selected "png" to replace not found
             if (selected == -1)
             {
-                DisplayStr("Couldn't find equivalent: " + png);
+                DisplayStr("Couldn't find equivalent image for " + ab + " (Asset: " + assetfile_name + ", Texture: " + png_noext + ")");
                 return;
             }
 
@@ -140,21 +132,38 @@ namespace UAFGJ
             bool ret = ImportTexturesCustom(atvf, png, out AssetTypeValueField id);
             if (id == null || !ret)
             {
-                DisplayStr("Could not set image...");
+                DisplayStr("Could not set image for " + ab + " (Asset: " + assetfile_name + ", Texture: " + png_noext + ")");
                 return;
             }
 
-            DisplayStr("Write output to byte array");
+            SaveFile(id, afie, assetInst, bundleInst, ab, assetfile_name, png_noext);
+
+            // Unload everything
+            am.UnloadAllAssetsFiles(true);
+            am.UnloadAllBundleFiles();
+
+            PackLZ4(ab_real_name);
+
+            DisplayStr("Done!");
+        }
+
+        private static void SaveFile(
+            AssetTypeValueField id, AssetFileInfoEx afie,
+            AssetsFileInstance assetInst, BundleFileInstance bundleInst,
+            string ab, string assetfile_name, string png_noext)
+        {
+            // buffer
             var newGoBytes = id.WriteToByteArray();
             var repl = new AssetsReplacerFromMemory(0, afie.index, (int)afie.curFileType, 0xffff, newGoBytes);
 
-            if(repl == null || repl.ToString().Length == 0)
+            if (repl == null || repl.ToString().Length == 0)
             {
-                DisplayStr("repl == null");
+                DisplayStr("The asset replacer was null for " + ab + " (Asset: " + assetfile_name + ", Texture: " + png_noext + ")");
                 return;
             }
 
             /*
+            // DO NOT write assetInst twice (there's currently a bug)
             using (var stream = File.OpenWrite("resources-modified.assets"))
             using (var writer = new AssetsFileWriter(stream))
             {
@@ -162,7 +171,7 @@ namespace UAFGJ
             }
             */
 
-            DisplayStr("Write changes to memory");
+            DebugStr("Write changes to memory");
 
             //write changes to memory
             byte[] newAssetData;
@@ -175,46 +184,99 @@ namespace UAFGJ
 
             if (newAssetData == null)
             {
-                DisplayStr("newAssetData == null");
+                DisplayStr("The new asset data was null for " + ab + " (Asset: " + assetfile_name + ", Texture: " + png_noext + ")");
                 return;
             }
-
-            //DisplayStr(Encoding.UTF8.GetString(newAssetData));
-
-            DisplayStr("Do bunRepl");
 
             //rename this asset name from boring to cool when saving
             var bunRepl = new BundleReplacerFromMemory(assetfile_name, null, true, newAssetData, -1);
 
-            if(bunRepl == null)
+            if (bunRepl == null)
             {
-                DisplayStr("bunRepl == null");
+                DisplayStr("The bundle replacer was null for " + ab + " (Asset: " + assetfile_name + ", Texture: " + png_noext + ")");
                 return;
             }
 
-            DisplayStr("Do bunWriter");
-
+            string ab_fake_name = ab + "_temp";
+            // Save "fake" file since it's going to be compressed later
             var bunWriter = new AssetsFileWriter(File.OpenWrite(ab_fake_name));
             bundleInst.file.Write(bunWriter, new List<BundleReplacer>() { bunRepl });
             bunWriter.Close();
-            am.UnloadAllAssetsFiles(true);
-            am.UnloadAllBundleFiles();
+        }
 
-            if(!File.Exists(ab_fake_name))
+        private static AssetsFileInstance GetAssetInst(AssetsManager am, BundleFileInstance bundleInst, string assetfile_name, string ab)
+        {
+            // Load from index instead of name for now
+            AssetsFileInstance assetInst = am.LoadAssetsFileFromBundle(bundleInst, 0, true);
+            if (assetInst == null)
+            {
+                DisplayStr("Could not load asset file for " + assetfile_name + " in " + ab);
+            }
+            else
+            {
+                DebugStr("Loaded assetInst for " + assetfile_name);
+            }
+            return assetInst;
+        }
+
+        private static string GetRightAssetFileName(BundleFileInstance bundleInst, string ab)
+        {
+            string assetfile_name = "";
+            int cont = 0;
+            foreach (var i in bundleInst.file.bundleInf6.dirInf)
+            {
+                DebugStr("Found asset file: " + i.name);
+                // Not .resS
+                if (!i.name.Contains(".resS"))
+                {
+                    assetfile_name = i.name;
+                }
+                cont++;
+            }
+
+            if (cont > 2)
+            {
+                DisplayStr("More than 2 assets file found in " + ab + " (UNIMPLEMENTED)!");
+                return string.Empty;
+            }
+            return assetfile_name;
+        }
+
+        private static BundleFileInstance GetBundleInst(AssetsManager am, string ab)
+        {
+            BundleFileInstance bundleInst = am.LoadBundleFile(ab, true);
+            if (bundleInst == null)
+            {
+                DisplayStr("Could not load bundle file for " + ab);
+            }
+            return bundleInst;
+        }
+
+        private static void PackLZ4(string real_name)
+        {
+            // Pack using LZ4
+
+            string fake_name = real_name + "_temp";
+
+            if (!File.Exists(fake_name))
             {
                 return;
             }
 
-            am = new AssetsManager();
-            var bun = am.LoadBundleFile(ab_fake_name);
-            using (var stream = File.OpenWrite(ab_real_name))
+            AssetsManager am = new AssetsManager();
+            // Open temp file
+            var bun = am.LoadBundleFile(fake_name);
+            using (var stream = File.OpenWrite(real_name))
             using (var writer = new AssetsFileWriter(stream))
             {
+                // Save packed "real" file
                 bun.file.Pack(bun.file.reader, writer, AssetBundleCompressionType.LZ4);
             }
             am.UnloadAllBundleFiles();
 
-            File.Delete(ab_fake_name);
+            // Delete temp file
+
+            File.Delete(fake_name);
         }
 
         private static void DecompressToMemory(BundleFileInstance bundleInst)
@@ -235,7 +297,7 @@ namespace UAFGJ
 
         private static bool ImportTexturesCustom(AssetTypeValueField atvf, string png, out AssetTypeValueField id)
         {
-            // Get the current texture format
+            // Set the texture format to RGBA32 (hack)
             TextureFormat fmt = TextureFormat.RGBA32;
 
             // Try to import a .png (of the selected textureformat) from selectedFilePath
@@ -248,7 +310,7 @@ namespace UAFGJ
                 return false;
             }
 
-            // Tell Unity to load from byte array instead of file
+            // Load from byte array
             AssetTypeValueField m_StreamData = atvf.Get("m_StreamData");
             m_StreamData.Get("offset").GetValue().Set(0);
             m_StreamData.Get("size").GetValue().Set(0);
@@ -268,8 +330,6 @@ namespace UAFGJ
 
             // Set image height
             atvf.Get("m_Height").GetValue().Set(height);
-
-            // From here: actual writing of the rgba byte array
 
             // Read the field "image data"
             AssetTypeValueField image_data = atvf.Get("image data");
