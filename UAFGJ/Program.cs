@@ -101,6 +101,7 @@ namespace UAFGJ
             int selected = -1;
             string png_noext = png;
             int cont = 0;
+            int format = 0;
 
             // Iterate the files in assetInst
             foreach (var inf in assetInst.table.GetAssetsOfType((int)AssetClassID.Texture2D))
@@ -109,6 +110,7 @@ namespace UAFGJ
                 atvf = am.GetTypeInstance(assetInst, afie).GetBaseField();
 
                 var name = atvf.Get("m_Name").GetValue().AsString();
+                format = atvf.Get("m_TextureFormat").GetValue().AsInt();
                 DebugStr(name);
 
                 png_noext = Path.GetFileNameWithoutExtension(png);
@@ -129,7 +131,7 @@ namespace UAFGJ
             }
 
             // Import textures
-            bool ret = ImportTexturesCustom(atvf, png, out AssetTypeValueField id);
+            bool ret = ImportTexturesCustom(atvf, png, out AssetTypeValueField id, format);
             if (id == null || !ret)
             {
                 DisplayStr("Could not set image for " + ab + " (Asset: " + assetfile_name + ", Texture: " + png_noext + ")");
@@ -295,10 +297,9 @@ namespace UAFGJ
             bundleInst.file = newBundle;
         }
 
-        private static bool ImportTexturesCustom(AssetTypeValueField atvf, string png, out AssetTypeValueField id)
+        private static bool ImportTexturesCustom(AssetTypeValueField atvf, string png, out AssetTypeValueField id, int format)
         {
-            // Set the texture format to RGBA32 (hack)
-            TextureFormat fmt = TextureFormat.RGBA32;
+            TextureFormat fmt = (TextureFormat)format;
 
             // Try to import a .png (of the selected textureformat) from selectedFilePath
             // After doing that, save two new variables as width and height of the image
@@ -319,7 +320,7 @@ namespace UAFGJ
             if (!atvf.Get("m_MipCount").IsDummy())
                 atvf.Get("m_MipCount").GetValue().Set(1);
 
-            // TextureFormat.RGBA32
+            // Set texture format to desired format
             atvf.Get("m_TextureFormat").GetValue().Set((int)fmt);
 
             // Set to the byte array length
