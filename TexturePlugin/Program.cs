@@ -91,7 +91,10 @@ namespace TexturePlugin
                 AssetTypeValueField baseField = cont.TypeInstance.GetBaseField();
                 TextureFormat fmt = (TextureFormat)baseField.Get("m_TextureFormat").GetValue().AsInt();
 
-                byte[] encImageBytes = TextureImportExport.ImportPng(selectedFilePath, fmt, out int width, out int height);
+                int og_width = baseField.Get("m_Width").GetValue().AsInt();
+                int og_height = baseField.Get("m_Height").GetValue().AsInt();
+
+                byte[] encImageBytes = TextureImportExport.ImportPng(selectedFilePath, fmt, false, og_width, og_height, out int width, out int height);
 
                 if (encImageBytes == null)
                 {

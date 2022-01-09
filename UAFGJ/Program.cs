@@ -301,9 +301,12 @@ namespace UAFGJ
         {
             TextureFormat fmt = (TextureFormat)format;
 
+            int og_width = atvf.Get("m_Width").GetValue().AsInt();
+            int og_height = atvf.Get("m_Height").GetValue().AsInt();
+
             // Try to import a .png (of the selected textureformat) from selectedFilePath
             // After doing that, save two new variables as width and height of the image
-            byte[] encImageBytes = TextureImportExport.ImportPng(png, fmt, out int width, out int height);
+            byte[] encImageBytes = TextureImportExport.ImportPng(png, fmt, true, og_width, og_height, out int width, out int height);
 
             if (encImageBytes == null)
             {

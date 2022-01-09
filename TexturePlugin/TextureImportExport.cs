@@ -10,13 +10,18 @@ namespace TexturePlugin
 {
     public class TextureImportExport
     {
-        public static byte[] ImportPng(string file, TextureFormat format, out int width, out int height)
+        public static byte[] ImportPng(string file, TextureFormat format, bool resize, int original_width, int original_height, out int width, out int height)
         {
             byte[] decData;
             using (Image<Rgba32> image = Image.Load<Rgba32>(file))
             {
                 width = image.Width;
                 height = image.Height;
+
+                if(resize && (original_width != width || original_height != height))
+                {
+                    image.Mutate(i => i.Resize(original_width, original_height));
+                }
 
                 image.Mutate(i => i.Flip(FlipMode.Vertical));
                 if (image.TryGetSinglePixelSpan(out var pixelSpan))
