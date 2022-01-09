@@ -18,7 +18,7 @@ namespace TexturePlugin
                 width = image.Width;
                 height = image.Height;
 
-                if(resize && (original_width != width || original_height != height))
+                if(resize && (original_width != width || original_height != height) && original_height != 0 && original_width != 0)
                 {
                     image.Mutate(i => i.Resize(original_width, original_height));
                 }
