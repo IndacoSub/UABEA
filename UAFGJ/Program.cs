@@ -17,7 +17,7 @@ namespace UAFGJ
         {
             if (args.Length < 2)
             {
-                DebugStr("Not enough arguments!");
+                DisplayStr("Not enough arguments!");
                 return;
             }
 
@@ -26,13 +26,13 @@ namespace UAFGJ
 
             if (!File.Exists(ab))
             {
-                DebugStr(".ab file not found!");
+                DisplayStr(".ab file not found!");
                 return;
             }
 
             if (!File.Exists(png))
             {
-                DebugStr(".png file not found!");
+                DisplayStr(".png file not found!");
                 return;
             }
 
