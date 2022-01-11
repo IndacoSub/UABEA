@@ -21,12 +21,12 @@ namespace UAFGJ
                 return;
             }
 
-            string ab = args[0];
+            string asset_or_ab = args[0];
             string png = args[1];
 
-            if (!File.Exists(ab))
+            if (!File.Exists(asset_or_ab))
             {
-                DisplayStr(".ab file not found!");
+                DisplayStr(".asset/.ab file not found!");
                 return;
             }
 
@@ -36,7 +36,7 @@ namespace UAFGJ
                 return;
             }
 
-            DoStuff(ab, png);
+            DoStuff(asset_or_ab, png);
         }
 
         static private void DebugStr(string s)
@@ -49,41 +49,30 @@ namespace UAFGJ
             Console.WriteLine(s);
         }
 
-        static private void DoStuff(string ab, string png)
+        static private void HandleBundle(string ab, string png)
         {
-            string ab_real_name = ab;
-
-            DebugStr("Opening file: " + ab);
-            DetectedFileType file_type = AssetBundleDetector.DetectFileType(ab);
-            DebugStr("Detected file type: " + file_type.ToString());
-            if (file_type != DetectedFileType.BundleFile)
-            {
-                DisplayStr("Invalid file type for " + ab + ": " + file_type.ToString());
-                return;
-            }
-
             AssetsManager am = new AssetsManager();
 
             BundleFileInstance bundleInst = GetBundleInst(am, ab);
-            if(bundleInst == null)
+            if (bundleInst == null)
             {
                 return;
             }
 
-            string assetfile_name = GetRightAssetFileName(bundleInst, ab);
+            string assetfile_name = GetRightAssetFileNameFromBundle(bundleInst, ab);
             if (string.IsNullOrEmpty(assetfile_name))
             {
                 return;
             }
 
             AssetsFileInstance assetInst = GetAssetInst(am, bundleInst, assetfile_name, ab);
-            if(assetInst == null)
+            if (assetInst == null)
             {
                 return;
             }
 
             // Load classdata.tpk
-            if(!File.Exists("classdata.tpk"))
+            if (!File.Exists("classdata.tpk"))
             {
                 DisplayStr("classdata.tpk not found!");
                 return;
@@ -138,18 +127,116 @@ namespace UAFGJ
                 return;
             }
 
-            SaveFile(id, afie, assetInst, bundleInst, ab, assetfile_name, png_noext);
+            SaveAssetBundle(id, afie, assetInst, bundleInst, ab, assetfile_name, png_noext);
 
             // Unload everything
             am.UnloadAllAssetsFiles(true);
             am.UnloadAllBundleFiles();
 
-            PackLZ4(ab_real_name);
+            string ab_real_name = ab;
+            PackLZ4Bundle(ab_real_name);
 
             DisplayStr("Done!");
         }
 
-        private static void SaveFile(
+        static private void HandleAsset(string asset, string png)
+        {
+            AssetsManager am = new AssetsManager();
+            AssetsFileInstance assetInst = am.LoadAssetsFile(asset, true);
+
+            am.LoadClassPackage("classdata.tpk");
+            if (!assetInst.file.typeTree.hasTypeTree)
+            {
+                am.LoadClassDatabaseFromPackage(assetInst.file.typeTree.unityVersion);
+            }
+            DebugStr("Loaded classdata.tpk");
+
+            AssetTypeValueField atvf = new AssetTypeValueField(); // "baseField"
+            AssetFileInfoEx afie = new AssetFileInfoEx();
+            int selected = -1;
+            string png_noext = png;
+            int cont = 0;
+            int format = 0;
+            // Iterate the files in assetInst
+            foreach (var inf in assetInst.table.GetAssetsOfType((int)AssetClassID.Texture2D))
+            {
+                afie = inf;
+                atvf = am.GetTypeInstance(assetInst, afie).GetBaseField();
+
+                var name = atvf.Get("m_Name").GetValue().AsString();
+                format = atvf.Get("m_TextureFormat").GetValue().AsInt();
+                DebugStr(name);
+
+                png_noext = Path.GetFileNameWithoutExtension(png);
+                png_noext = png_noext.ToLowerInvariant();
+                if (name == png_noext)
+                {
+                    selected = cont;
+                    break;
+                }
+                cont++;
+            }
+
+            string assetfile_name = assetInst.name;
+
+            // Selected "png" to replace not found
+            if (selected == -1)
+            {
+                DisplayStr("Couldn't find equivalent image for " + asset + " (Asset: " + assetfile_name + ", Texture: " + png_noext + ")");
+                return;
+            }
+
+            // Import textures
+            bool ret = ImportTexturesCustom(atvf, png, out AssetTypeValueField id, format);
+            if (id == null || !ret)
+            {
+                DisplayStr("Could not set image for " + asset + " (Asset: " + assetfile_name + ", Texture: " + png_noext + ")");
+                return;
+            }
+
+            // buffer
+            var newGoBytes = id.WriteToByteArray();
+            var repl = new AssetsReplacerFromMemory(0, afie.index, (int)afie.curFileType, 0xffff, newGoBytes);
+
+            if (repl == null || repl.ToString().Length == 0)
+            {
+                DisplayStr("The asset replacer was null for " + asset + " (Asset: " + assetfile_name + ", Texture: " + png_noext + ")");
+                return;
+            }
+
+            string fake_name = asset + "_temp";
+            using (var stream = File.OpenWrite(fake_name))
+            using (var writer = new AssetsFileWriter(stream))
+            {
+                assetInst.file.Write(writer, 0, new List<AssetsReplacer>() { repl }, 0);
+            }
+
+            string real_name = asset;
+            // Unload everything
+            am.UnloadAllAssetsFiles(true);
+            File.Move(fake_name, real_name, true);
+        }
+
+        static private void DoStuff(string asset_or_ab, string png)
+        {
+            DebugStr("Opening file: " + asset_or_ab);
+            DetectedFileType file_type = AssetBundleDetector.DetectFileType(asset_or_ab);
+            DebugStr("Detected file type: " + file_type.ToString());
+            switch(file_type)
+            {
+                case DetectedFileType.BundleFile:
+                    HandleBundle(asset_or_ab, png);
+                    break;
+                case DetectedFileType.AssetsFile:
+                    HandleAsset(asset_or_ab, png);
+                    break;
+                case DetectedFileType.Unknown:
+                    DisplayStr("Invalid file type for " + asset_or_ab + ": " + file_type.ToString());
+                    break;
+            }
+        }
+
+        private static void SaveAssetBundle(
             AssetTypeValueField id, AssetFileInfoEx afie,
             AssetsFileInstance assetInst, BundleFileInstance bundleInst,
             string ab, string assetfile_name, string png_noext)
@@ -221,7 +308,7 @@ namespace UAFGJ
             return assetInst;
         }
 
-        private static string GetRightAssetFileName(BundleFileInstance bundleInst, string ab)
+        private static string GetRightAssetFileNameFromBundle(BundleFileInstance bundleInst, string ab)
         {
             string assetfile_name = "";
             int cont = 0;
@@ -254,7 +341,7 @@ namespace UAFGJ
             return bundleInst;
         }
 
-        private static void PackLZ4(string real_name)
+        private static void PackLZ4Bundle(string real_name)
         {
             // Pack using LZ4
 
