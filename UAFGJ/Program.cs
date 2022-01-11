@@ -169,7 +169,7 @@ namespace UAFGJ
 
                 png_noext = Path.GetFileNameWithoutExtension(png);
                 png_noext = png_noext.ToLowerInvariant();
-                if (name == png_noext)
+                if (name.ToLowerInvariant() == png_noext)
                 {
                     selected = cont;
                     break;
