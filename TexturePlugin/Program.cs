@@ -17,7 +17,7 @@ namespace TexturePlugin
     {
         public static AssetTypeInstance GetByteArrayTexture(AssetWorkspace workspace, AssetContainer tex)
         {
-            AssetTypeTemplateField textureTemp = workspace.GetTemplateField(tex.FileInstance.file, tex.ClassId, tex.MonoId);
+            AssetTypeTemplateField textureTemp = workspace.GetTemplateField(tex, false);
             AssetTypeTemplateField image_data = textureTemp.children.FirstOrDefault(f => f.name == "image data");
             if (image_data == null)
                 return null;
@@ -151,7 +151,8 @@ namespace TexturePlugin
 
             if (dir != null && dir != string.Empty)
             {
-                ImportBatch dialog = new ImportBatch(workspace, selection, dir, ".png");
+                List<string> extensions = new List<string>() { "png" };
+                ImportBatch dialog = new ImportBatch(workspace, selection, dir, extensions);
                 List<ImportBatchInfo> batchInfos = await dialog.ShowDialog<List<ImportBatchInfo>>(win);
                 bool success = await ImportTextures(win, batchInfos);
                 if (success)
