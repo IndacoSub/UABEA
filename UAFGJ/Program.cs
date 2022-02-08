@@ -12,6 +12,8 @@ namespace UAFGJ
 {
     class Program
     {
+        StreamReader sr;
+        AssetsFileWriter aw;
 
         static void Main(string[] args)
         {
@@ -22,21 +24,213 @@ namespace UAFGJ
             }
 
             string asset_or_ab = args[0];
-            string png = args[1];
+            string input_file = args[1];
 
             if (!File.Exists(asset_or_ab))
             {
-                DisplayStr(".asset/.ab file not found!");
+                DisplayStr(".asset/.ab/.txt file not found!");
                 return;
             }
 
-            if (!File.Exists(png))
+            if (!File.Exists(input_file))
             {
-                DisplayStr(".png file not found!");
+                DisplayStr(".png/.txt file not found!");
                 return;
             }
 
-            DoStuff(asset_or_ab, png);
+            DoStuff(asset_or_ab, input_file);
+        }
+
+        static private bool ImportMonoBehaviourCustom(string input_file, AssetsManager am, AssetFileInfoEx afie, AssetsFileInstance assetInst, string assetname)
+        {
+            AssetContainer ac = new AssetContainer(afie, assetInst);
+            string fake_name = assetname + "_temp";
+
+            using (FileStream fs = File.OpenRead(input_file))
+            {
+                using (StreamReader sr = new StreamReader(fs))
+                {
+                    AssetImportExport importer = new AssetImportExport();
+                    byte[]? bytes = importer.ImportTextAsset(sr);
+
+                    if (bytes == null)
+                    {
+                        DisplayStr("Parse error: Something went wrong when reading the dump file.");
+                        return false;
+                    }
+
+                    AssetsReplacer replacer = AssetImportExport.CreateAssetReplacer(ac, bytes);
+                    using (var stream = File.OpenWrite(fake_name))
+                    using (var writer = new AssetsFileWriter(stream))
+                    {
+                        assetInst.file.Write(writer, 0, new List<AssetsReplacer>() { replacer }, 0);
+                    }
+                }
+            }
+
+            am.UnloadAllAssetsFiles(true);
+            File.Move(fake_name, assetname, true);
+
+            return true;
+        }
+
+        private bool StartsWithSpace(string str, string value)
+        {
+            return str.StartsWith(value + " ");
+        }
+
+        public byte[]? ImportTextAsset(StreamReader sr, out string? exceptionMessage)
+        {
+            this.sr = sr;
+            using (MemoryStream ms = new MemoryStream())
+            {
+                aw = new AssetsFileWriter(ms);
+                aw.bigEndian = false;
+                try
+                {
+                    ImportTextAssetLoop();
+                    exceptionMessage = null;
+                }
+                catch (Exception ex)
+                {
+                    exceptionMessage = ex.Message;
+                    return null;
+                }
+                return ms.ToArray();
+            }
+        }
+
+        private string UnescapeDumpString(string str)
+        {
+            StringBuilder sb = new StringBuilder(str.Length);
+            bool escaping = false;
+            foreach (char c in str)
+            {
+                if (!escaping && c == '\\')
+                {
+                    escaping = true;
+                    continue;
+                }
+
+                if (escaping)
+                {
+                    if (c == '\\')
+                        sb.Append('\\');
+                    else if (c == 'r')
+                        sb.Append('\r');
+                    else if (c == 'n')
+                        sb.Append('\n');
+                    else
+                        sb.Append(c);
+
+                    escaping = false;
+                }
+                else
+                {
+                    sb.Append(c);
+                }
+            }
+
+            return sb.ToString();
+        }
+
+        private void ImportTextAssetLoop()
+        {
+            Stack<bool> alignStack = new Stack<bool>();
+            while (true)
+            {
+                string? line = sr.ReadLine();
+                if (line == null)
+                    return;
+
+                int thisDepth = 0;
+                while (line[thisDepth] == ' ')
+                    thisDepth++;
+
+                if (line[thisDepth] == '[') //array index, ignore
+                    continue;
+
+                if (thisDepth < alignStack.Count)
+                {
+                    while (thisDepth < alignStack.Count)
+                    {
+                        if (alignStack.Pop())
+                            aw.Align();
+                    }
+                }
+
+                bool align = line.Substring(thisDepth, 1) == "1";
+                int typeName = thisDepth + 2;
+                int eqSign = line.IndexOf('=');
+                string valueStr = line.Substring(eqSign + 1).Trim();
+
+                if (eqSign != -1)
+                {
+                    string check = line.Substring(typeName);
+                    //this list may be incomplete
+                    if (StartsWithSpace(check, "bool"))
+                    {
+                        aw.Write(bool.Parse(valueStr));
+                    }
+                    else if (StartsWithSpace(check, "UInt8"))
+                    {
+                        aw.Write(byte.Parse(valueStr));
+                    }
+                    else if (StartsWithSpace(check, "SInt8"))
+                    {
+                        aw.Write(sbyte.Parse(valueStr));
+                    }
+                    else if (StartsWithSpace(check, "UInt16"))
+                    {
+                        aw.Write(ushort.Parse(valueStr));
+                    }
+                    else if (StartsWithSpace(check, "SInt16"))
+                    {
+                        aw.Write(short.Parse(valueStr));
+                    }
+                    else if (StartsWithSpace(check, "unsigned int"))
+                    {
+                        aw.Write(uint.Parse(valueStr));
+                    }
+                    else if (StartsWithSpace(check, "int"))
+                    {
+                        aw.Write(int.Parse(valueStr));
+                    }
+                    else if (StartsWithSpace(check, "UInt64"))
+                    {
+                        aw.Write(ulong.Parse(valueStr));
+                    }
+                    else if (StartsWithSpace(check, "SInt64"))
+                    {
+                        aw.Write(long.Parse(valueStr));
+                    }
+                    else if (StartsWithSpace(check, "float"))
+                    {
+                        aw.Write(float.Parse(valueStr));
+                    }
+                    else if (StartsWithSpace(check, "double"))
+                    {
+                        aw.Write(double.Parse(valueStr));
+                    }
+                    else if (StartsWithSpace(check, "string"))
+                    {
+                        int firstQuote = valueStr.IndexOf('"');
+                        int lastQuote = valueStr.LastIndexOf('"');
+                        string valueStrFix = valueStr.Substring(firstQuote + 1, lastQuote - firstQuote - 1);
+                        valueStrFix = UnescapeDumpString(valueStrFix);
+                        aw.WriteCountStringInt32(valueStrFix);
+                    }
+
+                    if (align)
+                    {
+                        aw.Align();
+                    }
+                }
+                else
+                {
+                    alignStack.Push(align);
+                }
+            }
         }
 
         static private void DebugStr(string s)
@@ -119,7 +313,7 @@ namespace UAFGJ
                 return;
             }
 
-            // Import textures
+            // Import textures (id is basically atvf but changed)
             bool ret = ImportTexturesCustom(atvf, png, out AssetTypeValueField id, format);
             if (id == null || !ret)
             {
@@ -139,7 +333,7 @@ namespace UAFGJ
             DisplayStr("Done!");
         }
 
-        static private void HandleAsset(string asset, string png)
+        static private void HandleAsset(string asset, string input_file)
         {
             AssetsManager am = new AssetsManager();
             AssetsFileInstance assetInst = am.LoadAssetsFile(asset, true);
@@ -154,43 +348,96 @@ namespace UAFGJ
             AssetTypeValueField atvf = new AssetTypeValueField(); // "baseField"
             AssetFileInfoEx afie = new AssetFileInfoEx();
             int selected = -1;
-            string png_noext = png;
             int cont = 0;
             int format = 0;
-            // Iterate the files in assetInst
-            foreach (var inf in assetInst.table.GetAssetsOfType((int)AssetClassID.Texture2D))
-            {
-                afie = inf;
-                atvf = am.GetTypeInstance(assetInst, afie).GetBaseField();
 
-                var name = atvf.Get("m_Name").GetValue().AsString();
-                format = atvf.Get("m_TextureFormat").GetValue().AsInt();
-                DebugStr(name);
-
-                png_noext = Path.GetFileNameWithoutExtension(png);
-                png_noext = png_noext.ToLowerInvariant();
-                if (name.ToLowerInvariant() == png_noext)
-                {
-                    selected = cont;
-                    break;
-                }
-                cont++;
-            }
-
+            string file_noext = input_file;
             string assetfile_name = assetInst.name;
 
-            // Selected "png" to replace not found
-            if (selected == -1)
-            {
-                DisplayStr("Couldn't find equivalent image for " + asset + " (Asset: " + assetfile_name + ", Texture: " + png_noext + ")");
-                return;
-            }
+            AssetTypeValueField id = new AssetTypeValueField();
 
-            // Import textures
-            bool ret = ImportTexturesCustom(atvf, png, out AssetTypeValueField id, format);
-            if (id == null || !ret)
+            if (input_file.Contains(".png"))
             {
-                DisplayStr("Could not set image for " + asset + " (Asset: " + assetfile_name + ", Texture: " + png_noext + ")");
+                // Iterate the files in assetInst
+                foreach (var inf in assetInst.table.GetAssetsOfType((int)AssetClassID.Texture2D))
+                {
+                    afie = inf;
+                    atvf = am.GetTypeInstance(assetInst, afie).GetBaseField();
+
+                    var name = atvf.Get("m_Name").GetValue().AsString();
+                    format = atvf.Get("m_TextureFormat").GetValue().AsInt();
+                    DebugStr(name);
+
+                    file_noext = Path.GetFileNameWithoutExtension(input_file);
+                    file_noext = file_noext.ToLowerInvariant();
+                    if (name.ToLowerInvariant() == file_noext)
+                    {
+                        selected = cont;
+                        break;
+                    }
+                    cont++;
+                }
+
+                // Selected "png" to replace not found
+                if (selected == -1)
+                {
+                    DisplayStr("Couldn't find equivalent image for " + asset + " (Asset: " + assetfile_name + ", InputFile: " + file_noext + ")");
+                    return;
+                }
+
+                // Import textures (id is basically atvf but changed)
+                bool ret = ImportTexturesCustom(atvf, input_file, out AssetTypeValueField id_out, format);
+                if (id_out == null || !ret)
+                {
+                    DisplayStr("Could not set image for " + asset + " (Asset: " + assetfile_name + ", InputFile: " + file_noext + ")");
+                    return;
+                }
+
+                id = id_out;
+            } else
+            {
+                // Assume .txt
+
+                if(!input_file.Contains(".txt"))
+                {
+                    Console.WriteLine("Unsupported extension: " + Path.GetExtension(input_file));
+                    return;
+                }
+
+                // Iterate the files in assetInst
+                foreach (var inf in assetInst.table.GetAssetsOfType((int)AssetClassID.MonoBehaviour))
+                {
+                    afie = inf;
+                    atvf = am.GetTypeInstance(assetInst, afie).GetBaseField();
+
+                    var name = atvf.Get("m_Name").GetValue().AsString();
+                    DebugStr(name);
+
+                    file_noext = Path.GetFileNameWithoutExtension(input_file);
+                    file_noext = file_noext.ToLowerInvariant();
+                    if (name.ToLowerInvariant() == file_noext)
+                    {
+                        selected = cont;
+                        break;
+                    }
+                    cont++;
+                }
+
+                // Selected "txt" to replace not found
+                if (selected == -1)
+                {
+                    DisplayStr("Couldn't find equivalent MonoBehaviour for " + asset + " (Asset: " + assetfile_name + ", InputFile: " + file_noext + ")");
+                    return;
+                } else
+                {
+                    DisplayStr("Found equivalent: " + selected + ": " + atvf.Get("m_Name").GetValue().AsString() + ", path ID: " + afie.index);
+                }
+
+                bool ret = ImportMonoBehaviourCustom(input_file, am, afie, assetInst, asset);
+                if(!ret)
+                {
+                    DisplayStr("Couldn't replace MonoBehaviour!");
+                }
                 return;
             }
 
@@ -200,7 +447,7 @@ namespace UAFGJ
 
             if (repl == null || repl.ToString().Length == 0)
             {
-                DisplayStr("The asset replacer was null for " + asset + " (Asset: " + assetfile_name + ", Texture: " + png_noext + ")");
+                DisplayStr("The asset replacer was null for " + asset + " (Asset: " + assetfile_name + ", InputFile: " + file_noext + ")");
                 return;
             }
 
@@ -386,7 +633,9 @@ namespace UAFGJ
 
         private static bool ImportTexturesCustom(AssetTypeValueField atvf, string png, out AssetTypeValueField id, int format)
         {
-            TextureFormat fmt = (TextureFormat)format;
+            const bool dxt_mitm = false;
+
+            TextureFormat fmt = dxt_mitm ? TextureFormat.DXT5 : (TextureFormat)format;
 
             int og_width = atvf.Get("m_Width").GetValue().AsInt();
             int og_height = atvf.Get("m_Height").GetValue().AsInt();
