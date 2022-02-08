@@ -51,7 +51,7 @@ namespace UAFGJ
                 using (StreamReader sr = new StreamReader(fs))
                 {
                     AssetImportExport importer = new AssetImportExport();
-                    byte[]? bytes = importer.ImportTextAsset(sr);
+                    byte[]? bytes = importer.ImportTextAsset(sr, out string ex);
 
                     if (bytes == null)
                     {
