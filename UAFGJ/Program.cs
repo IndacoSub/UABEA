@@ -356,7 +356,7 @@ namespace UAFGJ
 
             AssetTypeValueField id = new AssetTypeValueField();
 
-            if (input_file.Contains(".png"))
+            if (Path.GetExtension(input_file) == ".png")
             {
                 // Iterate the files in assetInst
                 foreach (var inf in assetInst.table.GetAssetsOfType((int)AssetClassID.Texture2D))
@@ -398,7 +398,7 @@ namespace UAFGJ
             {
                 // Assume .txt
 
-                if(!input_file.Contains(".txt"))
+                if(Path.GetExtension(input_file) != ".txt")
                 {
                     Console.WriteLine("Unsupported extension: " + Path.GetExtension(input_file));
                     return;
