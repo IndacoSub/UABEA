@@ -221,10 +221,18 @@ namespace UABEAvalonia
             }
         }
 
-        private void MenuDependencies_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        private async void MenuDependencies_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         {
             DependenciesWindow dialog = new DependenciesWindow(Workspace);
-            dialog.Show(this);
+            HashSet<AssetsFileInstance> changedFiles = await dialog.ShowDialog<HashSet<AssetsFileInstance>>(this);
+            if (changedFiles != null && changedFiles.Count > 0)
+            {
+                Workspace.Modified = true;
+                foreach (AssetsFileInstance changedFile in changedFiles)
+                {
+                    Workspace.SetOtherAssetChangeFlag(changedFile, AssetsFileChangeTypes.Dependencies);
+                }
+            }
         }
 
         private void MenuHierarchy_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -244,12 +252,11 @@ namespace UABEAvalonia
                 var bigFileBox = MessageBoxManager
                     .GetMessageBoxCustomWindow(new MessageBoxCustomParams
                     {
-                        Style = Style.Windows,
                         ContentHeader = "Warning",
                         ContentMessage = "The asset you are about to open is very big and may take a lot of time and memory.",
                         ButtonDefinitions = new[] {
-                            new ButtonDefinition {Name = "Continue anyway", Type = ButtonType.Colored},
-                            new ButtonDefinition {Name = "Cancel", Type = ButtonType.Default}
+                            new ButtonDefinition {Name = "Continue anyway"},
+                            new ButtonDefinition {Name = "Cancel", IsDefault = true}
                         }
                     });
                 string result = await bigFileBox.Show();
@@ -385,6 +392,7 @@ namespace UABEAvalonia
         private async Task SaveFile()
         {
             var fileToReplacer = new Dictionary<AssetsFileInstance, List<AssetsReplacer>>();
+            var changedFiles = Workspace.GetChangedFiles();
 
             foreach (var newAsset in Workspace.NewAssets)
             {
@@ -404,10 +412,13 @@ namespace UABEAvalonia
             if (Workspace.fromBundle)
             {
                 ChangedAssetsDatas.Clear();
-                foreach (var kvp in fileToReplacer)
+                foreach (var file in changedFiles)
                 {
-                    AssetsFileInstance file = kvp.Key;
-                    List<AssetsReplacer> replacers = kvp.Value;
+                    List<AssetsReplacer> replacers;
+                    if (fileToReplacer.ContainsKey(file))
+                        replacers = fileToReplacer[file];
+                    else
+                        replacers = new List<AssetsReplacer>(0);
 
                     using (MemoryStream ms = new MemoryStream())
                     using (AssetsFileWriter w = new AssetsFileWriter(ms))
@@ -419,10 +430,13 @@ namespace UABEAvalonia
             }
             else
             {
-                foreach (var kvp in fileToReplacer)
+                foreach (var file in changedFiles)
                 {
-                    AssetsFileInstance file = kvp.Key;
-                    List<AssetsReplacer> replacers = kvp.Value;
+                    List<AssetsReplacer> replacers;
+                    if (fileToReplacer.ContainsKey(file))
+                        replacers = fileToReplacer[file];
+                    else
+                        replacers = new List<AssetsReplacer>(0);
 
                     SaveFileDialog sfd = new SaveFileDialog();
                     sfd.Title = "Save as...";
@@ -603,7 +617,7 @@ namespace UABEAvalonia
 
             if (dir != null && dir != string.Empty)
             {
-                List<string> extensions = new List<string>() { ".dat" };
+                List<string> extensions = new List<string>() { "dat" };
 
                 ImportBatch dialog = new ImportBatch(Workspace, selection, dir, extensions);
                 List<ImportBatchInfo> batchInfos = await dialog.ShowDialog<List<ImportBatchInfo>>(this);
@@ -640,7 +654,7 @@ namespace UABEAvalonia
             };
 
             string[] fileList = await ofd.ShowAsync(this);
-            if (fileList.Length == 0)
+            if (fileList == null || fileList.Length == 0)
                 return;
 
             string file = fileList[0];
@@ -734,7 +748,7 @@ namespace UABEAvalonia
             };
 
             string[] fileList = await ofd.ShowAsync(this);
-            if (fileList.Length == 0)
+            if (fileList == null || fileList.Length == 0)
                 return;
 
             string file = fileList[0];
@@ -884,6 +898,11 @@ namespace UABEAvalonia
 
             Extensions.GetUABENameFast(Workspace, cont, true, out name, out type);
 
+            if (name.Length > 100)
+                name = name[..100];
+            if (type.Length > 100)
+                type = type[..100];
+
             var item = new AssetInfoDataGridItem
             {
                 Name = name,
@@ -915,6 +934,9 @@ namespace UABEAvalonia
 
         private void RecurseGetAllAssets(AssetsFileInstance fromFile, Dictionary<AssetID, AssetContainer> conts, List<AssetsFileInstance> files, HashSet<string> fileNames)
         {
+            if (files.Contains(fromFile))
+                return;
+
             fromFile.table.GenerateQuickLookupTree();
 
             files.Add(fromFile);

@@ -16,8 +16,6 @@ namespace UABEAvalonia
             Console.WriteLine("Use at your own risk");
             Console.WriteLine("  UABEAvalonia batchexportbundle <directory>");
             Console.WriteLine("  UABEAvalonia batchimportbundle <directory>");
-            Console.WriteLine("  UABEAvalonia batchexportasset <directory> <dump-type> [<asset-types>]");
-            Console.WriteLine("  UABEAvalonia batchimportasset <directory> <dump-type> [<asset-types>]");
             Console.WriteLine("  UABEAvalonia applyemip <emip file> <directory>");
             Console.WriteLine("Bundle import/export arguments:");
             Console.WriteLine("  -keepnames writes out to the exact file name in the bundle.");
@@ -30,13 +28,6 @@ namespace UABEAvalonia
             Console.WriteLine("  -fd overwrite old .decomp files.");
             Console.WriteLine("  -md decompress into memory. Doesn't write .decomp files.");
             Console.WriteLine("      -kd and -fd won't do anything with this flag set.");
-            Console.WriteLine("Asset import/export arguments:");
-            Console.WriteLine("  dump-type");
-            Console.WriteLine("      Can be either txt or json.");
-            Console.WriteLine("  asset-types");
-            Console.WriteLine("      Optionally list asset type names separated by commas.");
-            Console.WriteLine("      If left empty, this includes all asset types.");
-            Console.WriteLine("      Example: GameObject,TextAsset,MonoBehaviour");
         }
 
         private static string GetMainFileName(string[] args)
@@ -243,16 +234,6 @@ namespace UABEAvalonia
                 Console.WriteLine("Done.");
             }
         }
-
-        private static void BatchExportAsset(string[] args)
-        {
-
-        }
-
-        private static void BatchImportAsset(string[] args)
-        {
-
-        }
         
         private static void ApplyEmip(string[] args)
         {
@@ -382,14 +363,6 @@ namespace UABEAvalonia
             else if (command == "batchimportbundle")
             {
                 BatchImportBundle(args);
-            }
-            else if (command == "batchexportasset")
-            {
-                BatchExportAsset(args);
-            }
-            else if (command == "batchimportasset")
-            {
-                BatchImportAsset(args);
             }
             else if (command == "applyemip")
             {

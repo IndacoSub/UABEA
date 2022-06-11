@@ -2,6 +2,7 @@ using AssetsTools.NET;
 using AssetsTools.NET.Extra;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
 using MessageBox.Avalonia.Enums;
@@ -17,6 +18,7 @@ namespace UABEAvalonia
     public class MainWindow : Window
     {
         //controls
+        private Menu menuMain;
         private MenuItem menuOpen;
         private MenuItem menuLoadPackageFile;
         private MenuItem menuClose;
@@ -27,11 +29,13 @@ namespace UABEAvalonia
         private MenuItem menuExit;
         private MenuItem menuEditTypeDatabase;
         private MenuItem menuEditTypePackage;
+        private MenuItem menuToggleDarkTheme;
         private MenuItem menuAbout;
         private TextBlock lblFileName;
         private ComboBox comboBox;
         private Button btnExport;
         private Button btnImport;
+        private Button btnRemove;
         private Button btnInfo;
         private Button btnExportAll;
         private Button btnImportAll;
@@ -56,6 +60,7 @@ namespace UABEAvalonia
             this.AttachDevTools();
 #endif
             //generated items
+            menuMain = this.FindControl<Menu>("menuMain");
             menuOpen = this.FindControl<MenuItem>("menuOpen");
             menuLoadPackageFile = this.FindControl<MenuItem>("menuLoadPackageFile");
             menuClose = this.FindControl<MenuItem>("menuClose");
@@ -66,11 +71,13 @@ namespace UABEAvalonia
             menuExit = this.FindControl<MenuItem>("menuExit");
             menuEditTypeDatabase = this.FindControl<MenuItem>("menuEditTypeDatabase");
             menuEditTypePackage = this.FindControl<MenuItem>("menuEditTypePackage");
+            menuToggleDarkTheme = this.FindControl<MenuItem>("menuToggleDarkTheme");
             menuAbout = this.FindControl<MenuItem>("menuAbout");
             lblFileName = this.FindControl<TextBlock>("lblFileName");
             comboBox = this.FindControl<ComboBox>("comboBox");
             btnExport = this.FindControl<Button>("btnExport");
             btnImport = this.FindControl<Button>("btnImport");
+            btnRemove = this.FindControl<Button>("btnRemove");
             btnInfo = this.FindControl<Button>("btnInfo");
             btnExportAll = this.FindControl<Button>("btnExportAll");
             btnImportAll = this.FindControl<Button>("btnImportAll");
@@ -82,9 +89,11 @@ namespace UABEAvalonia
             menuCompress.Click += MenuCompress_Click;
             menuCreatePackageFile.Click += MenuCreatePackageFile_Click;
             menuExit.Click += MenuExit_Click;
+            menuToggleDarkTheme.Click += MenuToggleDarkTheme_Click;
             menuAbout.Click += MenuAbout_Click;
             btnExport.Click += BtnExport_Click;
             btnImport.Click += BtnImport_Click;
+            btnRemove.Click += BtnRemove_Click;
             btnInfo.Click += BtnInfo_Click;
             btnExportAll.Click += BtnExportAll_Click;
             Closing += MainWindow_Closing;
@@ -93,6 +102,10 @@ namespace UABEAvalonia
             changesUnsaved = false;
             changesMade = false;
             ignoreCloseEvent = false;
+
+            AddHandler(DragDrop.DropEvent, Drop);
+
+            ThemeHandler.UseDarkTheme = ConfigurationManager.Settings.UseDarkTheme;
         }
 
         private async void MainWindow_Initialized(object? sender, EventArgs e)
@@ -111,64 +124,100 @@ namespace UABEAvalonia
             }
         }
 
+        async void OpenFiles(string[] files)
+        {
+            string selectedFile = files[0];
+
+            DetectedFileType fileType = AssetBundleDetector.DetectFileType(selectedFile);
+
+            CloseAllFiles();
+
+            //can you even have split bundles?
+            if (fileType != DetectedFileType.Unknown)
+            {
+                if (selectedFile.EndsWith(".split0"))
+                {
+                    string? splitFilePath = await AskLoadSplitFile(selectedFile);
+                    if (splitFilePath == null)
+                        return;
+                    else
+                        selectedFile = splitFilePath;
+                }
+            }
+
+            if (fileType == DetectedFileType.AssetsFile)
+            {
+                AssetsFileInstance fileInst = am.LoadAssetsFile(selectedFile, true);
+
+                if (!await LoadOrAskTypeData(fileInst))
+                    return;
+
+                List<AssetsFileInstance> fileInstances = new List<AssetsFileInstance>();
+                fileInstances.Add(fileInst);
+
+                if (files.Length > 1)
+                {
+                    for (int i = 1; i < files.Length; i++)
+                    {
+                        string otherSelectedFile = files[i];
+                        DetectedFileType otherFileType = AssetBundleDetector.DetectFileType(otherSelectedFile);
+                        if (otherFileType == DetectedFileType.AssetsFile)
+                        {
+                            try
+                            {
+                                fileInstances.Add(am.LoadAssetsFile(otherSelectedFile, true));
+                            }
+                            catch { } // no warning if the file didn't load but was detects as assets file
+                        }
+                    }
+                }
+
+                InfoWindow info = new InfoWindow(am, fileInstances, false);
+                info.Show();
+            }
+            else if (fileType == DetectedFileType.BundleFile)
+            {
+                bundleInst = am.LoadBundleFile(selectedFile, false);
+                //don't pester user to decompress if it's only the header that is compressed
+                if (AssetBundleUtil.IsBundleDataCompressed(bundleInst.file))
+                {
+                    AskLoadCompressedBundle(bundleInst);
+                }
+                else
+                {
+                    if ((bundleInst.file.bundleHeader6.flags & 0x3F) != 0) //header is compressed (most likely)
+                        bundleInst.file.UnpackInfoOnly();
+                    LoadBundle(bundleInst);
+                }
+            }
+            else
+            {
+                await MessageBoxUtil.ShowDialog(this, "Error", "This doesn't seem to be an assets file or bundle.");
+            }
+        }
+
+        void Drop(object sender, DragEventArgs e)
+        {
+            string[] files = e.Data.GetFileNames().ToArray();
+
+            if (files == null || files.Length == 0)
+                return;
+
+            OpenFiles(files);
+        }
+
         private async void MenuOpen_Click(object? sender, RoutedEventArgs e)
         {
             OpenFileDialog ofd = new OpenFileDialog();
             ofd.Title = "Open assets or bundle file";
             ofd.Filters = new List<FileDialogFilter>() { new FileDialogFilter() { Name = "All files", Extensions = new List<string>() { "*" } } };
-            string[] files = await ofd.ShowAsync(this);
+            ofd.AllowMultiple = true;
+            string[]? files = await ofd.ShowAsync(this);
 
-            if (files != null && files.Length > 0)
-            {
-                string selectedFile = files[0];
+            if (files == null || files.Length == 0)
+                return;
 
-                DetectedFileType fileType = AssetBundleDetector.DetectFileType(selectedFile);
-
-                CloseAllFiles();
-
-                //can you even have split bundles?
-                if (fileType != DetectedFileType.Unknown)
-                {
-                    if (selectedFile.EndsWith(".split0"))
-                    {
-                        string? splitFilePath = await AskLoadSplitFile(selectedFile);
-                        if (splitFilePath == null)
-                            return;
-                        else
-                            selectedFile = splitFilePath;
-                    }
-                }
-
-                if (fileType == DetectedFileType.AssetsFile)
-                {
-                    AssetsFileInstance fileInst = am.LoadAssetsFile(selectedFile, true);
-
-                    if (!await LoadOrAskTypeData(fileInst))
-                        return;
-
-                    InfoWindow info = new InfoWindow(am, new List<AssetsFileInstance> { fileInst }, false);
-                    info.Show();
-                }
-                else if (fileType == DetectedFileType.BundleFile)
-                {
-                    bundleInst = am.LoadBundleFile(selectedFile, false);
-                    //don't pester user to decompress if it's only the header that is compressed
-                    if (AssetBundleUtil.IsBundleDataCompressed(bundleInst.file))
-                    {
-                        AskLoadCompressedBundle(bundleInst);
-                    }
-                    else
-                    {
-                        if ((bundleInst.file.bundleHeader6.flags & 0x3F) != 0) //header is compressed (most likely)
-                            bundleInst.file.UnpackInfoOnly();
-                        LoadBundle(bundleInst);
-                    }
-                }
-                else
-                {
-                    await MessageBoxUtil.ShowDialog(this, "Error", "This doesn't seem to be an assets file or bundle.");
-                }
-            }
+            OpenFiles(files);
         }
 
         private async void MenuLoadPackageFile_Click(object? sender, RoutedEventArgs e)
@@ -178,7 +227,7 @@ namespace UABEAvalonia
                 new FileDialogFilter() { Name = "UABE Mod Installer Package", Extensions = new List<string>() { "emip" } }
             };
 
-            string[] fileList = await ofd.ShowAsync(this);
+            string[]? fileList = await ofd.ShowAsync(this);
 
             if (fileList == null || fileList.Length == 0)
                 return;
@@ -254,7 +303,7 @@ namespace UABEAvalonia
 
                 string[] files = await ofd.ShowAsync(this);
 
-                if (files.Length == 0)
+                if (files == null || files.Length == 0)
                     return;
 
                 string file = files[0];
@@ -262,13 +311,16 @@ namespace UABEAvalonia
                 if (file == null)
                     return;
 
+                ImportSerializedDialog dialog = new ImportSerializedDialog();
+                bool isSerialized = await dialog.ShowDialog<bool>(this);
+
                 //todo replacer from stream rather than bytes
                 //also need to handle closing them somewhere
                 //and replacers don't support closing
                 byte[] fileBytes = File.ReadAllBytes(file);
                 string fileName = Path.GetFileName(file);
 
-                newFiles[fileName] = AssetImportExport.CreateBundleReplacer(fileName, true, fileBytes);
+                newFiles[fileName] = AssetImportExport.CreateBundleReplacer(fileName, isSerialized, fileBytes);
 
                 //check for existing combobox item
                 ComboBoxItem? comboBoxItem = comboItems.FirstOrDefault(i => (string)i.Content == fileName);
@@ -287,6 +339,39 @@ namespace UABEAvalonia
                     comboBox.SelectedIndex = comboItems.Count - 1;
                 }
 
+                SetBundleControlsEnabled(true, true); // since it's an import it's always going to have assets in the combobox at this point so we force all the buttons to enable in case there were some that were still disabled
+                changesUnsaved = true;
+                changesMade = true;
+            }
+        }
+
+        private async void BtnRemove_Click(object? sender, RoutedEventArgs e)
+        {
+            if (bundleInst != null && comboBox.SelectedItem != null)
+            {
+                int index = (int)((ComboBoxItem)comboBox.SelectedItem).Tag;
+
+                if (index < bundleInst.file.bundleInf6.dirInf.Length) // Pre-existing asset when bundle was opened
+                {
+                    string bunAssetName = bundleInst.file.bundleInf6.dirInf[index].name;
+                    newFiles.Add(bunAssetName, AssetImportExport.CreateBundleRemover(bunAssetName, true));
+                }
+                else // this asset was most likely imported after the bundle was opened and hasn't been saved yet
+                {
+                    string bunAssetName = (string)((ComboBoxItem)comboBox.SelectedItem).Content;
+                    if (newFiles.ContainsKey(bunAssetName))
+                    {
+                        newFiles.Remove(bunAssetName);
+                    }
+                }
+
+                comboItems.Remove((ComboBoxItem)comboBox.SelectedItem);
+                if (comboItems.Count > 0)
+                {
+                    comboBox.SelectedIndex = 0;
+                }
+
+                SetBundleControlsEnabled(true, comboItems.Count > 0);
                 changesUnsaved = true;
                 changesMade = true;
             }
@@ -294,55 +379,62 @@ namespace UABEAvalonia
 
         private async void BtnInfo_Click(object? sender, RoutedEventArgs e)
         {
-            if (bundleInst != null && comboBox.SelectedItem != null)
+            if (bundleInst == null || comboBox.SelectedItem == null)
+                return;
+
+            object? indexObj = ((ComboBoxItem)comboBox.SelectedItem).Tag;
+            if (indexObj == null)
+                return;
+
+            int index = (int)indexObj;
+
+            AssetBundleFile bundleFile = bundleInst.file;
+
+            string bunAssetName = bundleFile.bundleInf6.dirInf[index].name;
+
+            //when we make a modification to an assets file in the bundle,
+            //we replace the assets file in the manager. this way, all we
+            //have to do is not reload from the bundle if our assets file
+            //has been modified
+            MemoryStream assetStream;
+            if (!newFiles.ContainsKey(bunAssetName))
             {
-                int index = (int)((ComboBoxItem)comboBox.SelectedItem).Tag;
+                byte[] assetData = BundleHelper.LoadAssetDataFromBundle(bundleFile, index);
+                assetStream = new MemoryStream(assetData);
+            }
+            else
+            {
+                //unused if the file already exists
+                assetStream = null;
+            }
 
-                string bunAssetName = bundleInst.file.bundleInf6.dirInf[index].name;
+            //warning: does not update if you import an assets file onto
+            //a file that wasn't originally an assets file
+            var fileInf = BundleHelper.GetDirInfo(bundleFile, index);
+            long bundleEntryOffset = bundleFile.bundleHeader6.GetFileDataOffset() + fileInf.offset;
+            DetectedFileType fileType = AssetBundleDetector.DetectFileType(bundleFile.reader, bundleEntryOffset);
 
-                //when we make a modification to an assets file in the bundle,
-                //we replace the assets file in the manager. this way, all we
-                //have to do is not reload from the bundle if our assets file
-                //has been modified
-                MemoryStream assetStream;
-                if (!newFiles.ContainsKey(bunAssetName))
-                {
-                    byte[] assetData = BundleHelper.LoadAssetDataFromBundle(bundleInst.file, index);
-                    assetStream = new MemoryStream(assetData);
-                }
-                else
-                {
-                    //unused if the file already exists
-                    assetStream = null;
-                }
+            if (fileType == DetectedFileType.AssetsFile)
+            {
+                string assetMemPath = Path.Combine(bundleInst.path, bunAssetName);
+                AssetsFileInstance fileInst = am.LoadAssetsFile(assetStream, assetMemPath, true);
 
-                //warning: does not update if you import an assets file onto
-                //a file that wasn't originally an assets file
-                var fileInf = BundleHelper.GetDirInfo(bundleInst.file, index);
-                bool isAssetsFile = bundleInst.file.IsAssetsFile(bundleInst.file.reader, fileInf);
+                if (!await LoadOrAskTypeData(fileInst))
+                    return;
 
-                if (isAssetsFile)
-                {
-                    string assetMemPath = Path.Combine(bundleInst.path, bunAssetName);
-                    AssetsFileInstance fileInst = am.LoadAssetsFile(assetStream, assetMemPath, true);
+                if (bundleInst != null && fileInst.parentBundle == null)
+                    fileInst.parentBundle = bundleInst;
 
-                    if (!await LoadOrAskTypeData(fileInst))
-                        return;
-
-                    if (bundleInst != null && fileInst.parentBundle == null)
-                        fileInst.parentBundle = bundleInst;
-
-                    InfoWindow info = new InfoWindow(am, new List<AssetsFileInstance> { fileInst }, true);
-                    info.Closing += InfoWindow_Closing;
-                    info.Show();
-                }
-                else
-                {
-                    await MessageBoxUtil.ShowDialog(this,
-                        "Error", "This doesn't seem to be a valid assets file.\n" +
-                                 "If you want to export a non-assets file,\n" +
-                                 "use Export.");
-                }
+                InfoWindow info = new InfoWindow(am, new List<AssetsFileInstance> { fileInst }, true);
+                info.Closing += InfoWindow_Closing;
+                info.Show();
+            }
+            else
+            {
+                await MessageBoxUtil.ShowDialog(this,
+                    "Error", "This doesn't seem to be a valid assets file.\n" +
+                                "If you want to export a non-assets file,\n" +
+                                "use Export.");
             }
         }
 
@@ -354,33 +446,33 @@ namespace UABEAvalonia
             OpenFolderDialog ofd = new OpenFolderDialog();
             ofd.Title = "Select export directory";
 
-            string dir = await ofd.ShowAsync(this);
+            string? dir = await ofd.ShowAsync(this);
 
-            if (dir != null && dir != string.Empty)
+            if (dir == null || dir == string.Empty)
+                return;
+
+            for (int i = 0; i < bundleInst.file.bundleInf6.directoryCount; i++)
             {
-                for (int i = 0; i < bundleInst.file.bundleInf6.directoryCount; i++)
+                AssetBundleDirectoryInfo06 dirInf = bundleInst.file.bundleInf6.dirInf[i];
+
+                string bunAssetName = dirInf.name;
+                string bunAssetPath = Path.Combine(dir, bunAssetName);
+
+                //create dirs if bundle contains / in path
+                if (bunAssetName.Contains("\\") || bunAssetName.Contains("/"))
                 {
-                    AssetBundleDirectoryInfo06 dirInf = bundleInst.file.bundleInf6.dirInf[i];
-
-                    string bunAssetName = dirInf.name;
-                    string bunAssetPath = Path.Combine(dir, bunAssetName);
-
-                    //create dirs if bundle contains / in path
-                    if (bunAssetName.Contains("\\") || bunAssetName.Contains("/"))
+                    string bunAssetDir = Path.GetDirectoryName(bunAssetPath);
+                    if (!Directory.Exists(bunAssetDir))
                     {
-                        string bunAssetDir = Path.GetDirectoryName(bunAssetPath);
-                        if (!Directory.Exists(bunAssetDir))
-                        {
-                            Directory.CreateDirectory(bunAssetDir);
-                        }    
-                    }
-
-                    using FileStream fileStream = File.OpenWrite(bunAssetPath);
-
-                    AssetsFileReader bundleReader = bundleInst.file.reader;
-                    bundleReader.Position = bundleInst.file.bundleHeader6.GetFileDataOffset() + dirInf.offset;
-                    bundleReader.BaseStream.CopyToCompat(fileStream, dirInf.decompressedSize);
+                        Directory.CreateDirectory(bunAssetDir);
+                    }    
                 }
+
+                using FileStream fileStream = File.OpenWrite(bunAssetPath);
+
+                AssetsFileReader bundleReader = bundleInst.file.reader;
+                bundleReader.Position = bundleInst.file.bundleHeader6.GetFileDataOffset() + dirInf.offset;
+                bundleReader.BaseStream.CopyToCompat(fileStream, dirInf.decompressedSize);
             }
         }
 
@@ -395,6 +487,15 @@ namespace UABEAvalonia
         private void MenuExit_Click(object? sender, RoutedEventArgs e)
         {
             Close();
+        }
+
+        private async void MenuToggleDarkTheme_Click(object? sender, RoutedEventArgs e)
+        {
+            ConfigurationManager.Settings.UseDarkTheme = !ConfigurationManager.Settings.UseDarkTheme;
+
+            // thanks avalonia
+            await MessageBoxUtil.ShowDialog(this, "Note",
+                "Themes will be updated when you restart.");
         }
 
         private async void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
@@ -493,7 +594,7 @@ namespace UABEAvalonia
                 SaveFileDialog sfd = new SaveFileDialog();
                 sfd.Title = "Save as...";
 
-                string file = await sfd.ShowAsync(this);
+                string? file = await sfd.ShowAsync(this);
 
                 if (file == null)
                     return;
@@ -560,7 +661,7 @@ namespace UABEAvalonia
                 SaveFileDialog sfd = new SaveFileDialog();
                 sfd.Title = "Save as...";
 
-                string file = await sfd.ShowAsync(this);
+                string? file = await sfd.ShowAsync(this);
 
                 if (file == null)
                     return;
@@ -604,30 +705,26 @@ namespace UABEAvalonia
                 sfd.InitialFileName = Path.GetFileName(selectedFile.Substring(0, selectedFile.Length - ".split0".Length));
                 string splitFilePath = await sfd.ShowAsync(this);
 
-                if (splitFilePath != null && splitFilePath != string.Empty)
-                {
-                    using (FileStream mergeFile = File.OpenWrite(splitFilePath))
-                    {
-                        int idx = 0;
-                        string thisSplitFileNoNum = selectedFile.Substring(0, selectedFile.Length - 1);
-                        string thisSplitFileNum = selectedFile;
-                        while (File.Exists(thisSplitFileNum))
-                        {
-                            using (FileStream thisSplitFile = File.OpenRead(thisSplitFileNum))
-                            {
-                                thisSplitFile.CopyTo(mergeFile);
-                            }
-
-                            idx++;
-                            thisSplitFileNum = $"{thisSplitFileNoNum}{idx}";
-                        };
-                    }
-                    return splitFilePath;
-                }
-                else
-                {
+                if (splitFilePath == null || splitFilePath == string.Empty)
                     return null;
+
+                using (FileStream mergeFile = File.OpenWrite(splitFilePath))
+                {
+                    int idx = 0;
+                    string thisSplitFileNoNum = selectedFile.Substring(0, selectedFile.Length - 1);
+                    string thisSplitFileNum = selectedFile;
+                    while (File.Exists(thisSplitFileNum))
+                    {
+                        using (FileStream thisSplitFile = File.OpenRead(thisSplitFileNum))
+                        {
+                            thisSplitFile.CopyTo(mergeFile);
+                        }
+
+                        idx++;
+                        thisSplitFileNum = $"{thisSplitFileNoNum}{idx}";
+                    };
                 }
+                return splitFilePath;
             }
             else if (splitRes == ButtonResult.No)
             {
@@ -725,8 +822,6 @@ namespace UABEAvalonia
 
         private void LoadBundle(BundleFileInstance bundleInst)
         {
-            SetBundleControlsEnabled(true);
-
             var infos = bundleInst.file.bundleInf6.dirInf;
             comboItems = new ObservableCollection<ComboBoxItem>();
             for (int i = 0; i < infos.Length; i++)
@@ -742,6 +837,8 @@ namespace UABEAvalonia
             comboBox.SelectedIndex = 0;
 
             lblFileName.Text = bundleInst.name;
+
+            SetBundleControlsEnabled(true, comboItems.Count > 0);
         }
 
         private void SaveBundle(BundleFileInstance bundleInst, string path)
@@ -782,13 +879,17 @@ namespace UABEAvalonia
             lblFileName.Text = "No file opened.";
         }
 
-        private void SetBundleControlsEnabled(bool enabled)
+        private void SetBundleControlsEnabled(bool enabled, bool hasAssets = false)
         {
+            // buttons that i want to enable only if i have assets they can interact with, always disable when it's time to disable every button
+            btnExport.IsEnabled = (enabled ? hasAssets : false);
+            btnRemove.IsEnabled = (enabled ? hasAssets : false);
+            btnInfo.IsEnabled = (enabled ? hasAssets : false);
+            btnExportAll.IsEnabled = (enabled ? hasAssets : false);
+
+            // always enable / disable no matter if there's assets or not
             comboBox.IsEnabled = enabled;
-            btnExport.IsEnabled = enabled;
             btnImport.IsEnabled = enabled;
-            btnInfo.IsEnabled = enabled;
-            btnExportAll.IsEnabled = enabled;
             btnImportAll.IsEnabled = enabled;
         }
 
