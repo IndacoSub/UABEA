@@ -94,7 +94,7 @@ namespace TexturePlugin
                 int og_width = baseField.Get("m_Width").GetValue().AsInt();
                 int og_height = baseField.Get("m_Height").GetValue().AsInt();
 
-                byte[] encImageBytes = TextureImportExport.ImportPng(selectedFilePath, fmt, false, og_width, og_height, out int width, out int height);
+                byte[] encImageBytes = TextureImportExport.Import(selectedFilePath, fmt, false, og_width, og_height, out int width, out int height);
 
                 if (encImageBytes == null)
                 {

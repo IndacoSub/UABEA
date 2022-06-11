@@ -12,7 +12,7 @@ namespace TexturePlugin
 {
     public class TextureImportExport
     {
-        public static byte[] ImportPng(string file, TextureFormat format, bool resize, int original_width, int original_height, out int width, out int height)
+        public static byte[] Import(string file, TextureFormat format, bool resize, int original_width, int original_height, out int width, out int height)
         {
             byte[] decData;
             using (Image<Rgba32> image = Image.Load<Rgba32>(file))

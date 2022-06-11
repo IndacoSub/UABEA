@@ -642,7 +642,7 @@ namespace UAFGJ
 
             // Try to import a .png (of the selected textureformat) from selectedFilePath
             // After doing that, save two new variables as width and height of the image
-            byte[] encImageBytes = TextureImportExport.ImportPng(png, fmt, true, og_width, og_height, out int width, out int height);
+            byte[] encImageBytes = TextureImportExport.Import(png, fmt, true, og_width, og_height, out int width, out int height);
 
             if (encImageBytes == null)
             {
