@@ -262,7 +262,7 @@ namespace TexturePlugin
                 ofd.Title = "Select export directory";
 
                 string dir = await ofd.ShowAsync(win);
-
+                
                 if (dir != null && dir != string.Empty)
                 {
                     StringBuilder errorBuilder = new StringBuilder();
