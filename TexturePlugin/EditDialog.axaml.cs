@@ -96,11 +96,11 @@ namespace TexturePlugin
             OpenFileDialog ofd = new OpenFileDialog();
             ofd.Title = "Open texture";
             ofd.Filters = new List<FileDialogFilter>() {
-                new FileDialogFilter() { Name = "PNG file", Extensions = new List<string>() { "png" } }
+                new FileDialogFilter() { Name = "Texture file", Extensions = new List<string>() { "png", "tga" } }
             };
 
             string[] fileList = await ofd.ShowAsync(this);
-            if (fileList.Length == 0)
+            if (fileList == null || fileList.Length == 0)
                 return;
 
             string file = fileList[0];
@@ -210,14 +210,9 @@ namespace TexturePlugin
                 tex.m_Height = image.Height;
 
                 image.Mutate(i => i.Flip(FlipMode.Vertical));
-                if (image.TryGetSinglePixelSpan(out var pixelSpan))
-                {
-                    modImageBytes = MemoryMarshal.AsBytes(pixelSpan).ToArray();
-                }
-                else
-                {
-                    modImageBytes = null; //rip
-                }
+
+                modImageBytes = new byte[tex.m_Width * tex.m_Height * 4];
+                image.CopyPixelDataTo(modImageBytes);
             }
         }
 

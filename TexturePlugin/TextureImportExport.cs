@@ -2,7 +2,9 @@
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
+using SixLabors.ImageSharp.Formats.Tga;
 using System;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 
@@ -26,28 +28,34 @@ namespace TexturePlugin
                 }
 
                 image.Mutate(i => i.Flip(FlipMode.Vertical));
-                if (image.TryGetSinglePixelSpan(out var pixelSpan))
-                {
-                    decData = MemoryMarshal.AsBytes(pixelSpan).ToArray();
-                }
-                else
-                {
-                    return null; //rip
-                }
+
+                decData = new byte[width * height * 4];
+                image.CopyPixelDataTo(decData);
             }
 
             byte[] encData = TextureEncoderDecoder.Encode(decData, width, height, format);
             return encData;
         }
-        public static bool ExportPng(byte[] encData, string file, int width, int height, TextureFormat format)
+        public static bool Export(byte[] encData, string file, int width, int height, TextureFormat format)
         {
+            string ext = Path.GetExtension(file);
             byte[] decData = TextureEncoderDecoder.Decode(encData, width, height, format);
             if (decData == null)
                 return false;
 
             Image<Rgba32> image = Image.LoadPixelData<Rgba32>(decData, width, height);
             image.Mutate(i => i.Flip(FlipMode.Vertical));
-            image.SaveAsPng(file);
+            switch (ext)
+            {
+                case ".png":
+                    image.SaveAsPng(file);
+                    break;
+                case ".tga":
+                    var encoder = new TgaEncoder();
+                    encoder.BitsPerPixel = TgaBitsPerPixel.Pixel32;
+                    image.SaveAsTga(file, encoder);
+                    break;
+            }
 
             return true;
         }
