@@ -58,8 +58,8 @@ namespace UABEAvalonia
             Stream fs = File.OpenRead(file);
             AssetsFileReader r = new AssetsFileReader(fs);
 
-            bun.Read(r, true);
-            if (bun.bundleHeader6.GetCompressionType() != 0)
+            bun.Read(r);
+            if (bun.Header.GetCompressionType() != 0)
             {
                 Stream nfs;
                 if (decompFile == null)
@@ -68,7 +68,7 @@ namespace UABEAvalonia
                     nfs = File.Open(decompFile, FileMode.Create, FileAccess.ReadWrite);
 
                 AssetsFileWriter w = new AssetsFileWriter(nfs);
-                bun.Unpack(r, w);
+                bun.Unpack(w);
 
                 nfs.Position = 0;
                 fs.Close();
@@ -77,7 +77,7 @@ namespace UABEAvalonia
                 r = new AssetsFileReader(fs);
 
                 bun = new AssetBundleFile();
-                bun.Read(r, false);
+                bun.Read(r);
             }
 
             return bun;
@@ -121,7 +121,7 @@ namespace UABEAvalonia
                     return;
                 }
 
-                DetectedFileType fileType = AssetBundleDetector.DetectFileType(file);
+                DetectedFileType fileType = FileTypeDetector.DetectFileType(file);
                 if (fileType != DetectedFileType.BundleFile)
                 {
                     continue;
@@ -130,16 +130,16 @@ namespace UABEAvalonia
                 Console.WriteLine($"Decompressing {file}...");
                 AssetBundleFile bun = DecompressBundle(file, decompFile);
 
-                int entryCount = bun.bundleInf6.dirInf.Length;
+                int entryCount = bun.BlockAndDirInfo.DirectoryInfos.Length;
                 for (int i = 0; i < entryCount; i++)
                 {
-                    string name = bun.bundleInf6.dirInf[i].name;
+                    string name = bun.BlockAndDirInfo.DirectoryInfos[i].Name;
                     byte[] data = BundleHelper.LoadAssetDataFromBundle(bun, i);
                     string outName;
                     if (flags.Contains("-keepnames"))
-                        outName = Path.Combine(exportDirectory, $"{name}.assets");
+                        outName = Path.Combine(exportDirectory, name);
                     else
-                        outName = Path.Combine(exportDirectory, $"{Path.GetFileName(file)}_{name}.assets");
+                        outName = Path.Combine(exportDirectory, $"{Path.GetFileName(file)}_{name}");
                     Console.WriteLine($"Exporting {outName}...");
                     File.WriteAllBytes(outName, data);
                 }
@@ -176,7 +176,7 @@ namespace UABEAvalonia
                     return;
                 }
 
-                DetectedFileType fileType = AssetBundleDetector.DetectFileType(file);
+                DetectedFileType fileType = FileTypeDetector.DetectFileType(file);
                 if (fileType != DetectedFileType.BundleFile)
                 {
                     continue;
@@ -188,17 +188,17 @@ namespace UABEAvalonia
                 List<BundleReplacer> reps = new List<BundleReplacer>();
                 List<Stream> streams = new List<Stream>();
 
-                int entryCount = bun.bundleInf6.dirInf.Length;
+                int entryCount = bun.BlockAndDirInfo.DirectoryInfos.Length;
                 for (int i = 0; i < entryCount; i++)
                 {
-                    string name = bun.bundleInf6.dirInf[i].name;
-                    string matchName = Path.Combine(file, $"{Path.GetFileName(file)}_{name}.assets");
+                    string name = bun.BlockAndDirInfo.DirectoryInfos[i].Name;
+                    string matchName = Path.Combine(importDirectory, $"{Path.GetFileName(file)}_{name}");
 
                     if (File.Exists(matchName))
                     {
                         FileStream fs = File.OpenRead(matchName);
                         long length = fs.Length;
-                        reps.Add(new BundleReplacerFromStream(matchName, matchName, true, fs, 0, length));
+                        reps.Add(new BundleReplacerFromStream(name, name, true, fs, 0, length));
                         streams.Add(fs);
                         Console.WriteLine($"Importing {matchName}...");
                     }
@@ -224,7 +224,6 @@ namespace UABEAvalonia
                     stream.Close();
 
                 bun.Close();
-                bun.reader.Close();
 
                 File.WriteAllBytes(file, data);
 
@@ -285,14 +284,14 @@ namespace UABEAvalonia
                             //read in assets files from the bundle for replacers that need them
                             string assetName = bunRep.GetOriginalEntryName();
                             var bunRepInf = BundleHelper.GetDirInfo(bun, assetName);
-                            long pos = bun.bundleHeader6.GetFileDataOffset() + bunRepInf.offset;
-                            bunRep.Init(bun.reader, pos, bunRepInf.decompressedSize);
+                            long pos = bunRepInf.Offset;
+                            bunRep.Init(bun.DataReader, pos, bunRepInf.DecompressedSize);
                         }
                         reps.Add(bunRep);
                     }
 
                     Console.WriteLine($"Writing {modFile}...");
-                    FileStream mfs = File.OpenWrite(modFile);
+                    FileStream mfs = File.Open(modFile, FileMode.Create);
                     AssetsFileWriter mw = new AssetsFileWriter(mfs);
                     bun.Write(mw, reps, instPkg.addedTypes); //addedTypes does nothing atm
                     
@@ -318,7 +317,8 @@ namespace UABEAvalonia
 
                     FileStream afs = File.OpenRead(affectedFilePath);
                     AssetsFileReader ar = new AssetsFileReader(afs);
-                    AssetsFile assets = new AssetsFile(ar);
+                    AssetsFile assets = new AssetsFile();
+                    assets.Read(ar);
                     List<AssetsReplacer> reps = new List<AssetsReplacer>();
 
                     foreach (var rep in affectedFile.replacers)
@@ -328,9 +328,9 @@ namespace UABEAvalonia
                     }
 
                     Console.WriteLine($"Writing {modFile}...");
-                    FileStream mfs = File.OpenWrite(modFile);
+                    FileStream mfs = File.Open(modFile, FileMode.Create);
                     AssetsFileWriter mw = new AssetsFileWriter(mfs);
-                    assets.Write(mw, 0, reps, 0, instPkg.addedTypes);
+                    assets.Write(mw, 0, reps, instPkg.addedTypes);
 
                     mfs.Close();
                     ar.Close();
