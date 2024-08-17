@@ -6,6 +6,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\TextAssetPlugin\TextAssetPlugin.csproj" />
     <ProjectReference Include="..\TexturePlugin\TexturePlugin.csproj" />
     <ProjectReference Include="..\UABEAvalonia\UABEAvalonia.csproj" />
   </ItemGroup>

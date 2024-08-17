@@ -18,6 +18,10 @@ EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "FontPlugin", "FontPlugin\FontPlugin.csproj", "{9C582792-C3AA-4854-9DB5-26AF330ACDDB}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "UAFGJ", "UAFGJ\UAFGJ.csproj", "{58B43EC1-9618-4144-A2DB-90095094F966}"
+	ProjectSection(ProjectDependencies) = postProject
+		{00E173EB-6B49-4055-A00E-18DBB1283C5B} = {00E173EB-6B49-4055-A00E-18DBB1283C5B}
+		{B334A509-14E0-4413-83C7-BA2439A40394} = {B334A509-14E0-4413-83C7-BA2439A40394}
+	EndProjectSection
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
