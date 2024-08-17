@@ -183,9 +183,8 @@ namespace TexturePlugin
                     image.SaveAsPng(path);
                     break;
                 case ".tga":
-                    var encoder = new TgaEncoder();
-                    encoder.BitsPerPixel = TgaBitsPerPixel.Pixel32;
-                    image.SaveAsTga(path, encoder);
+					var encoder = new TgaEncoder() { BitsPerPixel = TgaBitsPerPixel.Pixel32 };
+					image.SaveAsTga(path, encoder);
                     break;
             }
         }

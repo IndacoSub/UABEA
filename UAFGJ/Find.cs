@@ -10,7 +10,7 @@ namespace UAFGJ
 		static private bool FindTXTFile(
 	string input_file,
 	ref AssetsFileInstance assetInst, ref AssetFileInfo afie, ref AssetTypeValueField atvf, ref AssetsManager am,
-	string asset, string assetfile_name
+	string asset, string assetfile_name, string specific_pathid
 	)
 		{
 			if (Path.GetExtension(input_file) != ".txt")
@@ -25,6 +25,8 @@ namespace UAFGJ
 			string file_noext = Path.GetFileNameWithoutExtension(input_file);
 			file_noext = file_noext.ToLowerInvariant();
 
+			bool is_monobehaviour = false;
+
 			// Iterate the files in assetInst
 			foreach (var inf in assetInst.file.GetAssetsOfType((int)AssetClassID.MonoBehaviour))
 			{
@@ -33,7 +35,7 @@ namespace UAFGJ
 
 				if (atvf == null)
 				{
-					DisplayStr("ATVF is currently null at position " + cont + "!");
+					DisplayStr("[MonoBehaviour] ATVF is currently null at position " + cont + "!");
 				}
 
 				var name = atvf["m_Name"].AsString;
@@ -51,17 +53,69 @@ namespace UAFGJ
 			if (selected == -1)
 			{
 				DisplayStr("Couldn't find equivalent MonoBehaviour for " + asset + " (Asset: " + assetfile_name + ", InputFile: " + file_noext + ")");
-				return false;
+				is_monobehaviour = false;
 			}
 			else
 			{
-				DisplayStr("Found equivalent: " + selected + ": " + atvf["m_Name"].AsString + ", path ID: " + afie.PathId);
+				DisplayStr("Found equivalent MonoBehavour: " + selected + ": " + atvf["m_Name"].AsString + ", path ID: " + afie.PathId);
+				is_monobehaviour = true;
 			}
 
-			bool ret = ImportMonoBehaviourCustom(input_file, am, afie, assetInst, asset);
-			if (!ret)
+			if (is_monobehaviour)
 			{
-				DisplayStr("Couldn't replace MonoBehaviour!");
+				bool ret = ImportMonoBehaviourCustom(input_file, am, afie, assetInst, asset);
+				if (!ret)
+				{
+					DisplayStr("Couldn't replace MonoBehaviour!");
+					return false;
+				}
+			} else
+			{
+				selected = -1;
+				cont = 0;
+
+				// Iterate the files in assetInst
+				foreach (var inf in assetInst.file.GetAssetsOfType((int)AssetClassID.TextAsset))
+				{
+					afie = inf;
+					atvf = am.GetBaseField(assetInst, afie);
+
+					if (atvf == null)
+					{
+						DisplayStr("[TextAsset] ATVF is currently null at position " + cont + "!");
+					}
+
+					var name = atvf["m_Name"].AsString;
+					DebugStr(name);
+
+					if (name.ToLowerInvariant() == file_noext)
+					{
+						if (specific_pathid == "" || int.Parse(specific_pathid) == inf.PathId)
+						{
+							selected = cont;
+							break;
+						}
+					}
+					cont++;
+				}
+
+				// Selected "txt" to replace not found
+				if (selected == -1)
+				{
+					DisplayStr("Couldn't find equivalent TextAsset for " + asset + " (Asset: " + assetfile_name + ", InputFile: " + file_noext + ")");
+					return false;
+				}
+				else
+				{
+					DisplayStr("Found equivalent TextAsset: " + selected + ": " + atvf["m_Name"].AsString + ", path ID: " + afie.PathId);
+				}
+
+				bool ret = ImportTextAssetCustom(input_file, am, afie, assetInst, asset);
+				if (!ret)
+				{
+					DisplayStr("Couldn't replace TextAsset!");
+					return false;
+				}
 			}
 
 			return true;

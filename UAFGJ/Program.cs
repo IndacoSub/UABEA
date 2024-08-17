@@ -33,6 +33,8 @@ namespace UAFGJ
 
 			string asset_or_ab = args[0].Replace('\\', '/');
 			string input_file = args[1].Replace('\\', '/');
+			string pathid = args.Length >= 3 ? args[2] : "";
+			pathid = pathid.Replace("\\", "/");
 
 			if (!File.Exists(asset_or_ab))
 			{
@@ -53,10 +55,10 @@ namespace UAFGJ
 				DisplayStr("File exists: " + input_file);
 			}
 
-			DoStuff(asset_or_ab, input_file);
+			DoStuff(asset_or_ab, input_file, pathid);
 		}
 
-		static private void DoStuff(string asset_or_ab, string png)
+		static private void DoStuff(string asset_or_ab, string png, string specific_pathid)
 		{
 			DebugStr("Opening file: " + asset_or_ab);
 			DetectedFileType file_type = FileTypeDetector.DetectFileType(asset_or_ab);
@@ -64,10 +66,11 @@ namespace UAFGJ
 			switch (file_type)
 			{
 				case DetectedFileType.BundleFile:
-					HandleBundle(asset_or_ab, png);
+					HandleBundle(asset_or_ab, png, specific_pathid);
 					break;
 				case DetectedFileType.AssetsFile:
-					HandleAsset(asset_or_ab, png);
+					// .TXT support too
+					HandleAsset(asset_or_ab, png, specific_pathid);
 					break;
 				case DetectedFileType.Unknown:
 					DisplayStr("Invalid file type for " + asset_or_ab + ": " + file_type.ToString());

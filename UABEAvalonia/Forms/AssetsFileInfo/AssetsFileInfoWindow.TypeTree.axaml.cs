@@ -6,183 +6,200 @@ using System.Collections.ObjectModel;
 
 namespace UABEAvalonia
 {
-    public partial class AssetsFileInfoWindow
-    {
-        private void SetupTypeTreePageEvents()
-        {
-            lstTypeTreeType.SelectionChanged += TypeTreeTypeList_SelectionChanged;
-        }
+	public partial class AssetsFileInfoWindow
+	{
+		private void SetupTypeTreePageEvents()
+		{
+			lstTypeTreeType.SelectionChanged += TypeTreeTypeList_SelectionChanged;
+			treeTypeTreeNode.SelectionChanged += TreeTypeTreeNode_SelectionChanged;
+		}
 
-        private void TypeTreeTypeList_SelectionChanged(object? sender, SelectionChangedEventArgs e)
-        {
-            TypeTreeListItem? item = (TypeTreeListItem?)lstTypeTreeType.SelectedItem;
-            if (item != null)
-            {
-                FillTypeTreeTypeInfo(item.type);
-            }
-        }
+		private void TreeTypeTreeNode_SelectionChanged(object? sender, SelectionChangedEventArgs e)
+		{
+			if (treeTypeTreeNode.SelectedItem is TreeViewItem item)
+			{
+				if (item.Tag is TypeTreeNode node)
+				{
+					FillTypeTreeNodeInfo(node);
+				}
+			}
+		}
 
-        private void FillTypeTreeInfo()
-        {
-            AssetsFile afile = activeFile.file;
-            AssetsFileMetadata meta = afile.Metadata;
+		private void TypeTreeTypeList_SelectionChanged(object? sender, SelectionChangedEventArgs e)
+		{
+			if (lstTypeTreeType.SelectedItem is TypeTreeListItem item)
+			{
+				FillTypeTreeTypeInfo(item.type);
+			}
+		}
 
-            if (!meta.TypeTreeEnabled)
-            {
-                treeTypeTreeNode.ItemsSource = new List<string>()
-                {
-                    "There is no type tree data available."
-                };
-            }
-            else
-            {
-                treeTypeTreeNode.ItemsSource = new List<string>()
-                {
-                    "Select a type to show the type tree data."
-                };
-            }
+		private void FillTypeTreeInfo()
+		{
+			AssetsFile afile = activeFile.file;
+			AssetsFileMetadata meta = afile.Metadata;
 
-            List<TypeTreeListItem> typeListItems = new List<TypeTreeListItem>();
-            AddTypeTreeListItems(typeListItems, meta.TypeTreeTypes, false);
-            if (meta.RefTypes != null)
-            {
-                AddTypeTreeListItems(typeListItems, meta.RefTypes, true);
-            }
+			if (!meta.TypeTreeEnabled)
+			{
+				treeTypeTreeNode.ItemsSource = new List<string>()
+				{
+					"There is no type tree data available."
+				};
+			}
+			else
+			{
+				treeTypeTreeNode.ItemsSource = new List<string>()
+				{
+					"Select a type to show the type tree data."
+				};
+			}
 
-            lstTypeTreeType.ItemsSource = typeListItems;
-        }
+			List<TypeTreeListItem> typeListItems = new List<TypeTreeListItem>();
+			AddTypeTreeListItems(typeListItems, meta.TypeTreeTypes, false);
+			if (meta.RefTypes != null)
+			{
+				AddTypeTreeListItems(typeListItems, meta.RefTypes, true);
+			}
 
-        private void AddTypeTreeListItems(List<TypeTreeListItem> into, List<TypeTreeType> types, bool refType)
-        {
-            foreach (TypeTreeType type in types)
-            {
-                string typeName;
-                if (type.Nodes == null || type.Nodes.Count == 0)
-                {
-                    ClassDatabaseType dbType = cldb.FindAssetClassByID(type.TypeId);
-                    typeName = cldb.GetString(dbType.Name);
-                }
-                else
-                {
-                    TypeTreeNode baseField = type.Nodes[0];
-                    typeName = baseField.GetTypeString(type.StringBuffer);
-                }
+			lstTypeTreeType.ItemsSource = typeListItems;
+		}
 
-                string scriptIndexStr = string.Empty;
-                if (type.ScriptTypeIndex != 0xffff)
-                {
-                    scriptIndexStr = $"/{type.ScriptTypeIndex:d4}";
-                }
+		private void AddTypeTreeListItems(List<TypeTreeListItem> into, List<TypeTreeType> types, bool refType)
+		{
+			foreach (TypeTreeType type in types)
+			{
+				string typeName;
+				if (type.Nodes == null || type.Nodes.Count == 0)
+				{
+					ClassDatabaseType dbType = cldb.FindAssetClassByID(type.TypeId);
+					typeName = cldb.GetString(dbType.Name);
+				}
+				else
+				{
+					TypeTreeNode baseField = type.Nodes[0];
+					typeName = baseField.GetTypeString(type.StringBuffer);
+				}
 
-                string refInfo = refType ? " REF" : string.Empty;
-                into.Add(new TypeTreeListItem($"{typeName} (0x{type.TypeId:x}{scriptIndexStr}){refInfo}", type));
-            }
-        }
+				string scriptIndexStr = string.Empty;
+				if (type.ScriptTypeIndex != 0xffff)
+				{
+					scriptIndexStr = $"/{type.ScriptTypeIndex:d4}";
+				}
 
-        private void FillTypeTreeTypeInfo(TypeTreeType type)
-        {
-            AssetsFile afile = activeFile.file;
-            AssetsFileMetadata meta = afile.Metadata;
+				string refInfo = refType ? " REF" : string.Empty;
+				into.Add(new TypeTreeListItem($"{typeName} (0x{type.TypeId:x}{scriptIndexStr}){refInfo}", type));
+			}
+		}
 
-            if (type.Nodes == null || type.Nodes.Count == 0)
-            {
-                ClassDatabaseType cldt = cldb.FindAssetClassByID(type.TypeId);
-                boxTypeTreeType.Text = cldb.GetString(cldt.Name);
-            }
-            else
-            {
-                TypeTreeNode baseField = type.Nodes[0];
-                boxTypeTreeType.Text = baseField.GetTypeString(type.StringBuffer);
-            }
+		private void FillTypeTreeTypeInfo(TypeTreeType type)
+		{
+			AssetsFile afile = activeFile.file;
+			AssetsFileMetadata meta = afile.Metadata;
 
-            boxTypeTreeTypeId.Text = $"{type.TypeId} (0x{type.TypeId:x})";
-            if (type.ScriptTypeIndex != 0xffff)
-            {
-                string scriptName;
-                try
-                {
-                    scriptName = AssetHelper.GetAssetsFileScriptInfo(am, activeFile, type.ScriptTypeIndex).ClassName;
-                }
-                catch
-                {
-                    scriptName = "UNKNOWN";
-                }
+			if (type.Nodes == null || type.Nodes.Count == 0)
+			{
+				ClassDatabaseType cldt = cldb.FindAssetClassByID(type.TypeId);
+				boxTypeTreeType.Text = cldb.GetString(cldt.Name);
+			}
+			else
+			{
+				TypeTreeNode baseField = type.Nodes[0];
+				boxTypeTreeType.Text = baseField.GetTypeString(type.StringBuffer);
+			}
 
-                boxTypeTreeScriptId.Text = $"{type.ScriptTypeIndex} ({scriptName})";
-            }
-            else
-            {
-                boxTypeTreeScriptId.Text = string.Empty;
-            }
+			boxTypeTreeTypeId.Text = $"{type.TypeId} (0x{type.TypeId:x})";
+			if (type.ScriptTypeIndex != 0xffff)
+			{
+				string scriptName;
+				try
+				{
+					AssetTypeReference? scriptInfo = AssetHelper.GetAssetsFileScriptInfo(am, activeFile, type.ScriptTypeIndex);
+					scriptName = scriptInfo?.ClassName ?? "UNKNOWN";
+				}
+				catch
+				{
+					scriptName = "UNKNOWN";
+				}
 
-            if (!type.TypeHash.IsZero())
-                boxTypeTreeHash.Text = type.TypeHash.ToString();
-            else
-                boxTypeTreeHash.Text = string.Empty;
+				boxTypeTreeScriptId.Text = $"{type.ScriptTypeIndex} ({scriptName})";
+			}
+			else
+			{
+				boxTypeTreeScriptId.Text = string.Empty;
+			}
 
-            if (!type.ScriptIdHash.IsZero())
-                boxTypeTreeMonoHash.Text = type.ScriptIdHash.ToString();
-            else
-                boxTypeTreeMonoHash.Text = string.Empty;
+			if (!type.TypeHash.IsZero())
+				boxTypeTreeHash.Text = type.TypeHash.ToString();
+			else
+				boxTypeTreeHash.Text = string.Empty;
 
-            if (meta.TypeTreeEnabled)
-                FillTypeTreeNodeTree(type);
-        }
+			if (!type.ScriptIdHash.IsZero())
+				boxTypeTreeMonoHash.Text = type.ScriptIdHash.ToString();
+			else
+				boxTypeTreeMonoHash.Text = string.Empty;
 
-        private void FillTypeTreeNodeTree(TypeTreeType type)
-        {
-            var treeViewItems = new List<TreeViewItem>();
-            var treeNodeItemsStack = new List<ObservableCollection<TreeViewItem>>();
+			if (meta.TypeTreeEnabled)
+				FillTypeTreeNodeTree(type);
+		}
 
-            TypeTreeNode baseField = type.Nodes[0];
-            TreeViewItem rootNode = MakeTreeViewItem(TypeFieldToString(baseField, type), baseField);
-            treeViewItems.Add(rootNode);
-            treeNodeItemsStack.Add((ObservableCollection<TreeViewItem>)rootNode.ItemsSource!);
+		private void FillTypeTreeNodeInfo(TypeTreeNode node)
+		{
+			boxTypeTreeAligned.Text = (node.MetaFlags & 0x4000) != 0 ? "true" : "false";
+		}
 
-            for (int i = 1; i < type.Nodes.Count; i++)
-            {
-                TypeTreeNode field = type.Nodes[i];
-                ObservableCollection<TreeViewItem> parentNodeItems = treeNodeItemsStack[field.Level - 1];
-                TreeViewItem node = MakeTreeViewItem(TypeFieldToString(field, type), field);
+		private void FillTypeTreeNodeTree(TypeTreeType type)
+		{
+			var treeViewItems = new List<TreeViewItem>();
+			var treeNodeItemsStack = new List<ObservableCollection<TreeViewItem>>();
 
-                parentNodeItems?.Add(node);
+			TypeTreeNode baseField = type.Nodes[0];
+			TreeViewItem rootNode = MakeTreeViewItem(TypeFieldToString(baseField, type), baseField);
+			treeViewItems.Add(rootNode);
+			treeNodeItemsStack.Add((ObservableCollection<TreeViewItem>)rootNode.ItemsSource!);
 
-                node.Tag = field;
-                if (treeNodeItemsStack.Count > field.Level)
-                    treeNodeItemsStack[field.Level] = (ObservableCollection<TreeViewItem>)node.ItemsSource!;
-                else
-                    treeNodeItemsStack.Add((ObservableCollection<TreeViewItem>)node.ItemsSource!);
-            }
+			for (int i = 1; i < type.Nodes.Count; i++)
+			{
+				TypeTreeNode field = type.Nodes[i];
+				ObservableCollection<TreeViewItem> parentNodeItems = treeNodeItemsStack[field.Level - 1];
+				TreeViewItem node = MakeTreeViewItem(TypeFieldToString(field, type), field);
 
-            treeTypeTreeNode.ItemsSource = treeViewItems;
-        }
+				parentNodeItems?.Add(node);
 
-        private TreeViewItem MakeTreeViewItem(string header, object tag)
-        {
-            return new TreeViewItem() { Header = header, Tag = tag, ItemsSource = new ObservableCollection<TreeViewItem>() };
-        }
+				node.Tag = field;
+				if (treeNodeItemsStack.Count > field.Level)
+					treeNodeItemsStack[field.Level] = (ObservableCollection<TreeViewItem>)node.ItemsSource!;
+				else
+					treeNodeItemsStack.Add((ObservableCollection<TreeViewItem>)node.ItemsSource!);
+			}
 
-        private string TypeFieldToString(TypeTreeNode node, TypeTreeType type)
-        {
-            string stringTable = type.StringBuffer;
-            return $"{node.GetTypeString(stringTable)} {node.GetNameString(stringTable)}";
-        }
+			treeTypeTreeNode.ItemsSource = treeViewItems;
+		}
 
-        private class TypeTreeListItem
-        {
-            public string text;
-            public TypeTreeType type;
+		private TreeViewItem MakeTreeViewItem(string header, object tag)
+		{
+			return new TreeViewItem() { Header = header, Tag = tag, ItemsSource = new ObservableCollection<TreeViewItem>() };
+		}
 
-            public TypeTreeListItem(string text, TypeTreeType type)
-            {
-                this.text = text;
-                this.type = type;
-            }
+		private string TypeFieldToString(TypeTreeNode node, TypeTreeType type)
+		{
+			string stringTable = type.StringBuffer;
+			return $"{node.GetTypeString(stringTable)} {node.GetNameString(stringTable)}";
+		}
 
-            public override string ToString()
-            {
-                return text;
-            }
-        }
-    }
+		private class TypeTreeListItem
+		{
+			public string text;
+			public TypeTreeType type;
+
+			public TypeTreeListItem(string text, TypeTreeType type)
+			{
+				this.text = text;
+				this.type = type;
+			}
+
+			public override string ToString()
+			{
+				return text;
+			}
+		}
+	}
 }

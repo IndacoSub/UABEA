@@ -7,7 +7,7 @@ namespace UAFGJ
 {
 	partial class Program
 	{
-		static private void HandleBundle(string ab, string png)
+		static private void HandleBundle(string ab, string input_file, string specific_pathid)
 		{
 			AssetsManager am = new AssetsManager();
 
@@ -47,45 +47,60 @@ namespace UAFGJ
 			AssetTypeValueField atvf = new AssetTypeValueField(); // "baseField"
 			AssetFileInfo afie = new AssetFileInfo();
 			int selected = -1;
-			string png_noext = png;
+			string inputfile_noext = input_file;
 			int cont = 0;
-			int format = 0;
 
-			// Iterate the files in assetInst
-			foreach (var inf in assetInst.file.GetAssetsOfType((int)AssetClassID.Texture2D))
+			if (Path.GetExtension(input_file) != ".png")
 			{
-				afie = inf;
-				atvf = am.GetBaseField(assetInst, afie);
-				var name = atvf["m_Name"].AsString;
-				format = atvf["m_TextureFormat"].AsInt;
-				DebugStr(name);
+				// Assume .txt
 
-				png_noext = Path.GetFileNameWithoutExtension(png);
-				png_noext = png_noext.ToLowerInvariant();
-				if (name == png_noext)
+				if (!FindTXTFile(input_file, ref assetInst, ref afie, ref atvf, ref am, ab, assetfile_name, specific_pathid))
 				{
-					selected = cont;
-					break;
+					DisplayStr("Failed to replace TXT!");
+					return;
 				}
-				cont++;
 			}
-
-			// Selected "png" to replace not found
-			if (selected == -1)
+			else
 			{
-				DisplayStr("Couldn't find equivalent image for " + ab + " (Asset: " + assetfile_name + ", Texture: " + png_noext + ")");
-				return;
+
+				int format = 0;
+
+				// Iterate the files in assetInst
+				foreach (var inf in assetInst.file.GetAssetsOfType((int)AssetClassID.Texture2D))
+				{
+					afie = inf;
+					atvf = am.GetBaseField(assetInst, afie);
+					var name = atvf["m_Name"].AsString;
+					format = atvf["m_TextureFormat"].AsInt;
+					DebugStr(name);
+
+					inputfile_noext = Path.GetFileNameWithoutExtension(input_file);
+					inputfile_noext = inputfile_noext.ToLowerInvariant();
+					if (name == inputfile_noext)
+					{
+						selected = cont;
+						break;
+					}
+					cont++;
+				}
+
+				// Selected "png" to replace not found
+				if (selected == -1)
+				{
+					DisplayStr("Couldn't find equivalent image for " + ab + " (Asset: " + assetfile_name + ", Texture: " + inputfile_noext + ")");
+					return;
+				}
+
+				// Import textures (id is basically atvf but changed)
+				bool ret = ImportTexturesCustom(ref atvf, input_file, format);
+				if (atvf == null || !ret)
+				{
+					DisplayStr("Could not set image for " + ab + " (Asset: " + assetfile_name + ", Texture: " + inputfile_noext + ")");
+					return;
+				}
 			}
 
-			// Import textures (id is basically atvf but changed)
-			bool ret = ImportTexturesCustom(ref atvf, png, format);
-			if (atvf == null || !ret)
-			{
-				DisplayStr("Could not set image for " + ab + " (Asset: " + assetfile_name + ", Texture: " + png_noext + ")");
-				return;
-			}
-
-			SaveAssetBundle(atvf, afie, assetInst, bundleInst, ab, assetfile_name, png_noext);
+			SaveAssetBundle(atvf, afie, assetInst, bundleInst, ab, assetfile_name, inputfile_noext);
 
 			// Unload everything
 			if (!am.UnloadAllAssetsFiles(true))

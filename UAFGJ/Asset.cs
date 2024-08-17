@@ -10,7 +10,7 @@ namespace UAFGJ
 {
 	partial class Program
 	{
-		static private void HandleAsset(string asset, string input_file)
+		static private void HandleAsset(string asset, string input_file, string specific_pathid)
 		{
 			AssetsManager am = new AssetsManager();
 			AssetsFileInstance assetInst = am.LoadAssetsFile(asset, true);
@@ -32,7 +32,7 @@ namespace UAFGJ
 			{
 				// Assume .txt
 
-				if (!FindTXTFile(input_file, ref assetInst, ref afie, ref atvf, ref am, asset, assetfile_name))
+				if (!FindTXTFile(input_file, ref assetInst, ref afie, ref atvf, ref am, asset, assetfile_name, specific_pathid))
 				{
 					DisplayStr("Failed to replace TXT!");
 				}
