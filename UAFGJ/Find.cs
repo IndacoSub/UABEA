@@ -2,6 +2,7 @@
 using AssetsTools.NET;
 using System;
 using System.IO;
+using Avalonia.Styling;
 
 namespace UAFGJ
 {
@@ -90,7 +91,7 @@ namespace UAFGJ
 
 					if (name.ToLowerInvariant() == file_noext)
 					{
-						if (specific_pathid == "" || int.Parse(specific_pathid) == inf.PathId)
+						if (specific_pathid == "" || long.Parse(specific_pathid) == inf.PathId)
 						{
 							selected = cont;
 							break;
@@ -124,15 +125,19 @@ namespace UAFGJ
 		static private void FindPNGFile(
 			string input_file,
 			ref AssetFileInfo afie, ref AssetsFileInstance assetInst, ref AssetTypeValueField atvf, ref AssetsManager am,
-			string asset, string assetfile_name)
+			string asset, string assetfile_name, string specific_pathid)
 		{
 			int _format = 0;
 			int _selected = -1;
 			int cont = 0;
 
 			string file_noext = Path.GetFileNameWithoutExtension(input_file);
-			file_noext = file_noext.ToLowerInvariant();
+			file_noext = file_noext.Trim().ToLowerInvariant();
 			// Iterate the Texture2D files in assetInst
+			if (specific_pathid != "")
+			{
+				DebugStr("Looking for PathID: " + specific_pathid);
+			}
 			foreach (var inf in assetInst.file.GetAssetsOfType((int)AssetClassID.Texture2D))
 			{
 				afie = inf;
@@ -140,13 +145,17 @@ namespace UAFGJ
 
 				var name = atvf["m_Name"].AsString;
 				_format = atvf["m_TextureFormat"].AsInt;
-				DebugStr(name);
+				DebugStr(name + " / " + file_noext + " / " + inf.PathId);
 
 				// Is it the right file?
-				if (name.ToLowerInvariant() == file_noext)
+				if (name.Trim().ToLowerInvariant() == file_noext)
 				{
-					_selected = cont;
-					break;
+					DebugStr("Found potential candidate: " + name + ", pid: " + inf.PathId);
+					if (specific_pathid == "" || long.Parse(specific_pathid) == inf.PathId)
+					{
+						_selected = cont;
+						break;
+					}
 				}
 				cont++;
 			}

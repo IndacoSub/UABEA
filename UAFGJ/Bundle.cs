@@ -75,11 +75,16 @@ namespace UAFGJ
 					DebugStr(name);
 
 					inputfile_noext = Path.GetFileNameWithoutExtension(input_file);
-					inputfile_noext = inputfile_noext.ToLowerInvariant();
-					if (name == inputfile_noext)
+					inputfile_noext = inputfile_noext.Trim().ToLowerInvariant();
+					// Is it the right file?
+					if (name.Trim().ToLowerInvariant() == inputfile_noext)
 					{
-						selected = cont;
-						break;
+						DebugStr("Found potential candidate: " + name + ", pid: " + inf.PathId);
+						if (specific_pathid == "" || long.Parse(specific_pathid) == inf.PathId)
+						{
+							selected = cont;
+							break;
+						}
 					}
 					cont++;
 				}

@@ -41,7 +41,7 @@ namespace UAFGJ
 
 			// PNG
 
-			FindPNGFile(input_file, ref afie, ref assetInst, ref atvf, ref am, asset, assetfile_name);
+			FindPNGFile(input_file, ref afie, ref assetInst, ref atvf, ref am, asset, assetfile_name, specific_pathid);
 
 			if (afie == null)
 			{

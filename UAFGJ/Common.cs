@@ -28,11 +28,16 @@ namespace UAFGJ
 			foreach (var i in bundleInst.file.BlockAndDirInfo.DirectoryInfos)
 			{
 				DebugStr("Found asset file: " + i.Name);
-				// Not .resS
-				if (!i.Name.Contains(".resS"))
+				if (i.Name.Contains(".resS"))
 				{
-					assetfile_name = i.Name;
+					continue;
 				}
+				if(i.Name.EndsWith(".resource"))
+				{
+					continue;
+				}
+				DebugStr("Found good? asset file: " + i.Name);
+				assetfile_name = i.Name;
 				cont++;
 			}
 
