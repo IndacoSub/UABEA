@@ -325,3 +325,10 @@ ASALocalRun/
 
 # Zip releases
 *.zip
+TexToolWrap/PVRTexLib/Windows_x86_64/TexToolWrap.dll
+TexToolWrap/PVRTexLib/Windows_x86_64/ispc_texcomp.dll
+TexToolWrap/PVRTexLib/Windows_x86_64/crnlib.dll
+TexToolWrap/crunch/win64/TexToolWrap.dll
+TexToolWrap/ispc/win64/crnlib.dll
+TexToolWrap/ispc/win64/TexToolWrap.dll
+*.bak

@@ -84,7 +84,13 @@ namespace UABEAvalonia
                 }
 
                 typeName = cldb.GetString(type.Name);
-                List<ClassDatabaseTypeNode> cldbNodes = type.GetPreferredNode(false).Children;
+                var node = type.GetPreferredNode(false);
+                if(node == null)
+                {
+                    assetName = "Null asset";
+                    return;
+                }
+				List<ClassDatabaseTypeNode> cldbNodes = node.Children;
 
                 if (cldbNodes.Count == 0)
                 {

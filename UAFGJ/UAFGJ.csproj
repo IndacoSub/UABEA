@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net6.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TextAssetPlugin\TextAssetPlugin.csproj" />
+    <ProjectReference Include="..\TexturePlugin\TexturePlugin.csproj" />
+    <ProjectReference Include="..\UABEAvalonia\UABEAvalonia.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="AssetsTools.NET">
+      <HintPath>..\Libs\AssetsTools.NET.dll</HintPath>
+    </Reference>
+    <Reference Include="AssetsTools.NET.Texture">
+      <HintPath>..\Libs\AssetsTools.NET.Texture.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+</Project>
