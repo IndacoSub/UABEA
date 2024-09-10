@@ -28,7 +28,7 @@ namespace UAFGJ
 			foreach (var i in bundleInst.file.BlockAndDirInfo.DirectoryInfos)
 			{
 				DebugStr("Found asset file: " + i.Name);
-				if (i.Name.Contains(".resS"))
+				if (i.Name.EndsWith(".resS"))
 				{
 					continue;
 				}
@@ -39,9 +39,14 @@ namespace UAFGJ
 				DebugStr("Found good? asset file: " + i.Name);
 				assetfile_name = i.Name;
 				cont++;
+
+				if (i.Name.EndsWith(".sharedAssets"))
+				{
+					break;
+				}
 			}
 
-			if (cont > 2)
+			if (cont >= 2)
 			{
 				DisplayStr("More than 2 assets file found in " + ab + " (UNIMPLEMENTED)!");
 				return string.Empty;

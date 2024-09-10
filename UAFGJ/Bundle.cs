@@ -72,7 +72,7 @@ namespace UAFGJ
 					atvf = am.GetBaseField(assetInst, afie);
 					var name = atvf["m_Name"].AsString;
 					format = atvf["m_TextureFormat"].AsInt;
-					DebugStr(name);
+					//DebugStr(name);
 
 					inputfile_noext = Path.GetFileNameWithoutExtension(input_file);
 					inputfile_noext = inputfile_noext.Trim().ToLowerInvariant();

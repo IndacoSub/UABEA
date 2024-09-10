@@ -145,7 +145,7 @@ namespace UAFGJ
 
 				var name = atvf["m_Name"].AsString;
 				_format = atvf["m_TextureFormat"].AsInt;
-				DebugStr(name + " / " + file_noext + " / " + inf.PathId);
+				//DebugStr(name + " / " + file_noext + " / " + inf.PathId);
 
 				// Is it the right file?
 				if (name.Trim().ToLowerInvariant() == file_noext)
