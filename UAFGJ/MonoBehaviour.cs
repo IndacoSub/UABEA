@@ -1,69 +1,52 @@
-﻿using AssetsTools.NET.Extra;
 using AssetsTools.NET;
-using System.Collections.Generic;
-using System.IO;
-using UABEAvalonia;
+using AssetsTools.NET.Extra;
 using System;
+using System.IO;
 
 namespace UAFGJ
 {
 	partial class Program
 	{
-
-		static private bool ImportMonoBehaviourCustom(string input_file, AssetsManager am, AssetFileInfo afie, AssetsFileInstance assetInst, string assetname)
+		private static bool ImportMonoBehaviourCustom(
+			string inputFile,
+			AssetsManager am,
+			AssetFileInfo afie,
+			AssetsFileInstance assetInst,
+			string assetName,
+			out AssetsTools.NET.AssetTypeValueField modifiedBaseField,
+			out byte[] replacementData,
+			out byte[] originalSerializedData)
 		{
-			AssetContainer ac = new AssetContainer(afie, assetInst);
-			string fake_name = assetname + "_temp";
+			modifiedBaseField = null;
+			replacementData = Array.Empty<byte>();
+			originalSerializedData = Array.Empty<byte>();
 
-			using (FileStream fs = File.OpenRead(input_file))
-			{
-				using (StreamReader sr = new StreamReader(fs))
-				{
-					AssetImportExport importer = new AssetImportExport();
-					byte[]? bytes = importer.ImportTextAsset(sr, out string ex);
+			if (assetInst == null)
+				throw new InvalidOperationException("assetInst is null.");
+			if (afie == null)
+				throw new InvalidOperationException("AssetFileInfo is null.");
+			if (!File.Exists(inputFile))
+				throw new FileNotFoundException("TXT input not found.", inputFile);
 
-					if (bytes == null)
-					{
-						DisplayStr("Parse error: Something went wrong when reading the dump file.");
-						return false;
-					}
+			DebugStr($"[TXT] Importing MonoBehaviour '{assetName}' from dump '{inputFile}'");
+			DebugStr("[TXT] Cloning the source base field before any mutation...");
 
-					AssetsReplacer replacer = AssetImportExport.CreateAssetReplacer(ac, bytes);
-					using (var stream = File.OpenWrite(fake_name))
-					{
-						using (var writer = new AssetsFileWriter(stream))
-						{
-							assetInst.file.Write(writer, 0, new List<AssetsReplacer>() { replacer });
-						}
-					}
-				}
-			}
+			var baseField = am.GetBaseField(assetInst, afie);
+			if (baseField == null || baseField.IsDummy)
+				throw new InvalidDataException("AssetsTools.NET returned a null/dummy base field.");
 
-			am.UnloadAllAssetsFiles(true);
-			File.Move(fake_name, assetname, true);
+			originalSerializedData = baseField.WriteToByteArray();
+			DebugStr($"[CHECK] Original target base field serialized size={originalSerializedData.Length} SHA256={Sha256Hex(originalSerializedData)}");
 
+			// Apply only the scalar values represented by the dump. We intentionally keep
+			// the original AssetsTools.NET.AssetTypeValueField tree and let AssetsTools.NET serialize it.
+			ApplyTextDumpToBaseField(inputFile, baseField);
+
+			replacementData = baseField.WriteToByteArray();
+			DebugStr($"[CHECK] Modified target base field serialized size={replacementData.Length} SHA256={Sha256Hex(replacementData)}");
+
+			modifiedBaseField = baseField;
 			return true;
-		}
-
-		public byte[]? ImportTextAsset(StreamReader sr, out string? exceptionMessage)
-		{
-			this.sr = sr;
-			using (MemoryStream ms = new MemoryStream())
-			{
-				aw = new AssetsFileWriter(ms);
-				aw.BigEndian = false;
-				try
-				{
-					ImportTextAssetLoop();
-					exceptionMessage = null;
-				}
-				catch (Exception ex)
-				{
-					exceptionMessage = ex.Message;
-					return null;
-				}
-				return ms.ToArray();
-			}
 		}
 	}
 }

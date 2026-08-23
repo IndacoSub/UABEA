@@ -1,184 +1,645 @@
-﻿using AssetsTools.NET.Extra;
 using AssetsTools.NET;
+using AssetsTools.NET.Extra;
 using System;
 using System.IO;
-using Avalonia.Styling;
+using System.Linq;
+using System.Text;
 
 namespace UAFGJ
 {
-	partial class Program
-	{
-		static private bool FindTXTFile(
-	string input_file,
-	ref AssetsFileInstance assetInst, ref AssetFileInfo afie, ref AssetTypeValueField atvf, ref AssetsManager am,
-	string asset, string assetfile_name, string specific_pathid
-	)
-		{
-			if (Path.GetExtension(input_file) != ".txt")
-			{
-				Console.WriteLine("Unsupported extension: " + Path.GetExtension(input_file));
-				return false;
-			}
+    partial class Program
+    {
+        private static bool TryParsePathId(
+            string specificPathId,
+            out long pathId)
+        {
+            if (string.IsNullOrWhiteSpace(specificPathId))
+            {
+                pathId = 0;
+                return false;
+            }
 
-			int cont = 0;
-			int selected = -1;
+            return long.TryParse(
+                specificPathId,
+                out pathId);
+        }
 
-			string file_noext = Path.GetFileNameWithoutExtension(input_file);
-			file_noext = file_noext.ToLowerInvariant();
+        private static string GetAssetName(
+            AssetsTools.NET.AssetTypeValueField field)
+        {
+            try
+            {
+                if (field == null ||
+                    field.IsDummy)
+                {
+                    return "";
+                }
 
-			bool is_monobehaviour = false;
+                var nameField = field["m_Name"];
 
-			// Iterate the files in assetInst
-			foreach (var inf in assetInst.file.GetAssetsOfType((int)AssetClassID.MonoBehaviour))
-			{
-				afie = inf;
-				atvf = am.GetBaseField(assetInst, afie);
+                if (nameField == null ||
+                    nameField.IsDummy)
+                {
+                    return "";
+                }
 
-				if (atvf == null)
-				{
-					DisplayStr("[MonoBehaviour] ATVF is currently null at position " + cont + "!");
-				}
+                return nameField.AsString ?? "";
+            }
+            catch
+            {
+                return "";
+            }
+        }
 
-				var name = atvf["m_Name"].AsString;
-				DebugStr(name);
+        private static bool ImportTextAssetRaw(
+            string inputFile,
+            AssetsTools.NET.AssetTypeValueField baseField,
+            AssetFileInfo afie,
+            out byte[] originalSerializedData,
+            out byte[] replacementData)
+        {
+            originalSerializedData =
+                Array.Empty<byte>();
 
-				if (name.ToLowerInvariant() == file_noext)
-				{
-					selected = cont;
-					break;
-				}
-				cont++;
-			}
+            replacementData =
+                Array.Empty<byte>();
 
-			// Selected "txt" to replace not found
-			if (selected == -1)
-			{
-				DisplayStr("Couldn't find equivalent MonoBehaviour for " + asset + " (Asset: " + assetfile_name + ", InputFile: " + file_noext + ")");
-				is_monobehaviour = false;
-			}
-			else
-			{
-				DisplayStr("Found equivalent MonoBehavour: " + selected + ": " + atvf["m_Name"].AsString + ", path ID: " + afie.PathId);
-				is_monobehaviour = true;
-			}
+            if (baseField == null ||
+                baseField.IsDummy)
+            {
+                DebugStr(
+                    "[TXT] TextAsset BaseField is null/dummy.");
 
-			if (is_monobehaviour)
-			{
-				bool ret = ImportMonoBehaviourCustom(input_file, am, afie, assetInst, asset);
-				if (!ret)
-				{
-					DisplayStr("Couldn't replace MonoBehaviour!");
-					return false;
-				}
-			} else
-			{
-				selected = -1;
-				cont = 0;
+                return false;
+            }
 
-				// Iterate the files in assetInst
-				foreach (var inf in assetInst.file.GetAssetsOfType((int)AssetClassID.TextAsset))
-				{
-					afie = inf;
-					atvf = am.GetBaseField(assetInst, afie);
+            // --------------------------------------------------------
+            // Preserve the original serialized asset.
+            // --------------------------------------------------------
 
-					if (atvf == null)
-					{
-						DisplayStr("[TextAsset] ATVF is currently null at position " + cont + "!");
-					}
+            try
+            {
+                originalSerializedData =
+                    baseField.WriteToByteArray();
+            }
+            catch (Exception ex)
+            {
+                DebugStr(
+                    $"[TXT] Could not serialize original TextAsset " +
+                    $"PID={afie.PathId}: {ex}");
 
-					var name = atvf["m_Name"].AsString;
-					DebugStr(name);
+                return false;
+            }
 
-					if (name.ToLowerInvariant() == file_noext)
-					{
-						if (specific_pathid == "" || long.Parse(specific_pathid) == inf.PathId)
-						{
-							selected = cont;
-							break;
-						}
-					}
-					cont++;
-				}
+            DebugStr(
+                $"[TXT] Original TextAsset serialized size=" +
+                $"{originalSerializedData.Length} " +
+                $"SHA256={Sha256Hex(originalSerializedData)}");
 
-				// Selected "txt" to replace not found
-				if (selected == -1)
-				{
-					DisplayStr("Couldn't find equivalent TextAsset for " + asset + " (Asset: " + assetfile_name + ", InputFile: " + file_noext + ")");
-					return false;
-				}
-				else
-				{
-					DisplayStr("Found equivalent TextAsset: " + selected + ": " + atvf["m_Name"].AsString + ", path ID: " + afie.PathId);
-				}
+            // --------------------------------------------------------
+            // TextAsset structure:
+            //
+            //   m_Name
+            //   m_Script
+            //
+            // The external .txt file is raw text, NOT a UABEA
+            // structured dump.
+            // --------------------------------------------------------
 
-				bool ret = ImportTextAssetCustom(input_file, am, afie, assetInst, asset);
-				if (!ret)
-				{
-					DisplayStr("Couldn't replace TextAsset!");
-					return false;
-				}
-			}
+            AssetsTools.NET.AssetTypeValueField scriptField;
 
-			return true;
-		}
+            try
+            {
+                scriptField =
+                    baseField["m_Script"];
+            }
+            catch (Exception ex)
+            {
+                DebugStr(
+                    $"[TXT] Could not access TextAsset.m_Script " +
+                    $"for PID={afie.PathId}: {ex}");
 
-		static private void FindPNGFile(
-			string input_file,
-			ref AssetFileInfo afie, ref AssetsFileInstance assetInst, ref AssetTypeValueField atvf, ref AssetsManager am,
-			string asset, string assetfile_name, string specific_pathid)
-		{
-			int _format = 0;
-			int _selected = -1;
-			int cont = 0;
+                return false;
+            }
 
-			string file_noext = Path.GetFileNameWithoutExtension(input_file);
-			file_noext = file_noext.Trim().ToLowerInvariant();
-			// Iterate the Texture2D files in assetInst
-			if (specific_pathid != "")
-			{
-				DebugStr("Looking for PathID: " + specific_pathid);
-			}
-			foreach (var inf in assetInst.file.GetAssetsOfType((int)AssetClassID.Texture2D))
-			{
-				afie = inf;
-				atvf = am.GetBaseField(assetInst, afie);
+            if (scriptField == null ||
+                scriptField.IsDummy)
+            {
+                DebugStr(
+                    $"[TXT] TextAsset PID={afie.PathId} " +
+                    "does not have a valid m_Script field.");
 
-				var name = atvf["m_Name"].AsString;
-				_format = atvf["m_TextureFormat"].AsInt;
-				//DebugStr(name + " / " + file_noext + " / " + inf.PathId);
+                return false;
+            }
 
-				// Is it the right file?
-				if (name.Trim().ToLowerInvariant() == file_noext)
-				{
-					DebugStr("Found potential candidate: " + name + ", pid: " + inf.PathId);
-					if (specific_pathid == "" || long.Parse(specific_pathid) == inf.PathId)
-					{
-						_selected = cont;
-						break;
-					}
-				}
-				cont++;
-			}
+            // --------------------------------------------------------
+            // Read raw text.
+            //
+            // UTF-8 BOM is handled automatically by utf-8-sig.
+            // This also avoids leaving an accidental BOM in the
+            // serialized TextAsset string.
+            // --------------------------------------------------------
 
-			if (_selected == -1 || cont > _selected)
-			{
-				// Selected "png" to replace not found
-				DisplayStr("Couldn't find equivalent image for " + asset + " (Asset: " + assetfile_name + ", InputFile: " + file_noext + ")");
-			}
-			else
-			{
-				DisplayStr("Found equivalent image for " + asset + "( Asset: " + assetfile_name + ", InputFile: " + file_noext + "): " + _selected + " / pathID " + afie.PathId);
-			}
+            string text;
 
-			bool ret = ImportTexturesCustom(ref atvf, input_file, _format);
-			if (atvf == null || !ret)
-			{
-				DisplayStr("Could not set image for " + asset + " (Asset: " + assetfile_name + ", InputFile: " + file_noext + ")");
-			}
-			else
-			{
-				DisplayStr("Successfully set image for " + asset + " (Asset: " + assetfile_name + ", InputFile: " + file_noext + ")");
-			}
-		}
-	}
+            try
+            {
+                text = File.ReadAllText(
+                    inputFile,
+                    new UTF8Encoding(
+                        encoderShouldEmitUTF8Identifier: false,
+                        throwOnInvalidBytes: false));
+            }
+            catch (Exception ex)
+            {
+                DebugStr(
+                    $"[TXT] Could not read TextAsset source " +
+                    $"'{inputFile}': {ex}");
+
+                return false;
+            }
+
+            // Remove a BOM if the decoded string contains one.
+            if (text.Length > 0 &&
+                text[0] == '\uFEFF')
+            {
+                text = text.Substring(1);
+            }
+
+            DebugStr(
+                $"[TXT] Original TextAsset text length=" +
+                $"{scriptField.AsString?.Length ?? 0}");
+
+            DebugStr(
+                $"[TXT] New TextAsset text length=" +
+                $"{text.Length}");
+
+            // --------------------------------------------------------
+            // Replace m_Script directly.
+            // --------------------------------------------------------
+
+            try
+            {
+                scriptField.AsString = text;
+            }
+            catch (Exception ex)
+            {
+                DebugStr(
+                    $"[TXT] Failed assigning TextAsset.m_Script " +
+                    $"for PID={afie.PathId}: {ex}");
+
+                return false;
+            }
+
+            // --------------------------------------------------------
+            // Serialize modified asset.
+            // --------------------------------------------------------
+
+            try
+            {
+                replacementData =
+                    baseField.WriteToByteArray();
+            }
+            catch (Exception ex)
+            {
+                DebugStr(
+                    $"[TXT] Could not serialize modified TextAsset " +
+                    $"PID={afie.PathId}: {ex}");
+
+                return false;
+            }
+
+            if (replacementData.Length == 0)
+            {
+                DebugStr(
+                    $"[TXT] Modified TextAsset PID={afie.PathId} " +
+                    "serialized to zero bytes.");
+
+                return false;
+            }
+
+            DebugStr(
+                $"[TXT] Modified TextAsset serialized size=" +
+                $"{replacementData.Length} " +
+                $"SHA256={Sha256Hex(replacementData)}");
+
+            return true;
+        }
+
+        private static bool FindTXTFile(
+            string inputFile,
+            ref AssetsFileInstance assetInst,
+            ref AssetFileInfo afie,
+            ref AssetsTools.NET.AssetTypeValueField atvf,
+            ref AssetsManager am,
+            string asset,
+            string assetfile_name,
+            string specific_pathid,
+            out byte[] rawReplacementData,
+            out byte[] originalSerializedData)
+        {
+            rawReplacementData =
+                Array.Empty<byte>();
+
+            originalSerializedData =
+                Array.Empty<byte>();
+
+            if (assetInst == null)
+            {
+                DebugStr(
+                    "[TXT] AssetsFileInstance is null.");
+
+                return false;
+            }
+
+            if (am == null)
+            {
+                DebugStr(
+                    "[TXT] AssetsManager is null.");
+
+                return false;
+            }
+
+            if (!File.Exists(inputFile))
+            {
+                DebugStr(
+                    $"[TXT] Replacement file does not exist: " +
+                    $"{inputFile}");
+
+                return false;
+            }
+
+            string targetName =
+                Path.GetFileNameWithoutExtension(
+                    inputFile).Trim();
+
+            long wantedPathId;
+            bool hasWantedPathId =
+                TryParsePathId(
+                    specific_pathid,
+                    out wantedPathId);
+
+            // ========================================================
+            // PATH ID SEARCH
+            //
+            // If a PathID was supplied, search ALL assets.
+            // This is the important fix for TextAsset PID 122.
+            // ========================================================
+
+            if (hasWantedPathId)
+            {
+                DebugStr(
+                    $"[TXT] Searching assets in '{assetfile_name}' " +
+                    $"for exact PID {wantedPathId}");
+
+                AssetFileInfo exactMatch =
+                    assetInst.file.AssetInfos.FirstOrDefault(
+                        a => a.PathId == wantedPathId);
+
+                if (exactMatch == null)
+                {
+                    DisplayStr(
+                        $"[TXT] Could not find any asset " +
+                        $"with path ID {wantedPathId}.");
+
+                    return false;
+                }
+
+                afie = exactMatch;
+
+                AssetsTools.NET.AssetTypeValueField candidate;
+
+                try
+                {
+                    candidate =
+                        am.GetBaseField(
+                            assetInst,
+                            afie);
+                }
+                catch (Exception ex)
+                {
+                    DisplayStr(
+                        $"[TXT] Failed reading asset PID " +
+                        $"{wantedPathId}: " +
+                        $"{ex.GetType().Name}: {ex.Message}");
+
+                    DebugStr(ex.ToString());
+
+                    return false;
+                }
+
+                if (candidate == null ||
+                    candidate.IsDummy)
+                {
+                    DisplayStr(
+                        $"[TXT] Asset PID {wantedPathId} " +
+                        "returned a null/dummy BaseField.");
+
+                    return false;
+                }
+
+                string name =
+                    GetAssetName(candidate);
+
+                DebugStr(
+                    $"Found TXT target: " +
+                    $"PID={afie.PathId}, " +
+                    $"Name='{name}', " +
+                    $"TypeID={afie.TypeId}");
+
+                // ----------------------------------------------------
+                // Supported text asset types.
+                //
+                // 49  = TextAsset
+                // 114 = MonoBehaviour
+                // ----------------------------------------------------
+
+                if (afie.TypeId == 49)
+                {
+                    DebugStr(
+                        "[TXT] Target is TextAsset (TypeID=49); " +
+                        "MonoScript validation is not applicable.");
+
+                    atvf = candidate;
+
+                    return ImportTextAssetRaw(
+                        inputFile,
+                        atvf,
+                        afie,
+                        out originalSerializedData,
+                        out rawReplacementData);
+                }
+
+                if (afie.TypeId == 114)
+                {
+                    ushort monoId =
+                        assetInst.file.GetScriptIndex(
+                            afie);
+
+                    DebugStr(
+                        $"[TXT] Target is MonoBehaviour " +
+                        $"(TypeID=114), " +
+                        $"MonoScriptIndex={monoId} " +
+                        $"(0x{monoId:X4}).");
+
+                    AssetsTools.NET.AssetTypeValueField modifiedBaseField;
+                    byte[] monoOriginalData;
+
+                    if (!ImportMonoBehaviourCustom(
+                        inputFile,
+                        am,
+                        afie,
+                        assetInst,
+                        assetfile_name,
+                        out modifiedBaseField,
+                        out rawReplacementData,
+                        out monoOriginalData))
+                    {
+                        return false;
+                    }
+
+                    atvf =
+                        modifiedBaseField;
+
+                    originalSerializedData =
+                        monoOriginalData;
+
+                    return true;
+                }
+
+                DisplayStr(
+                    $"[TXT] Asset PID={afie.PathId}, " +
+                    $"Name='{name}' has unsupported TypeID={afie.TypeId}. " +
+                    "TXT import supports TextAsset (49) and " +
+                    "MonoBehaviour (114).");
+
+                return false;
+            }
+
+            // ========================================================
+            // FALLBACK BY NAME
+            //
+            // No PathID was supplied.
+            // Search supported text asset types only.
+            // ========================================================
+
+            DebugStr(
+                $"[TXT] No valid PathID supplied. " +
+                $"Searching supported text assets in " +
+                $"'{assetfile_name}' by name '{targetName}'.");
+
+            int candidatesScanned = 0;
+
+            foreach (var inf in assetInst.file.AssetInfos)
+            {
+                // Only types for which this method knows how to import TXT.
+                if (inf.TypeId != 49 &&
+                    inf.TypeId != 114)
+                {
+                    continue;
+                }
+
+                candidatesScanned++;
+
+                try
+                {
+                    var candidate =
+                        am.GetBaseField(
+                            assetInst,
+                            inf);
+
+                    if (candidate == null ||
+                        candidate.IsDummy)
+                    {
+                        continue;
+                    }
+
+                    string name =
+                        GetAssetName(candidate);
+
+                    DebugStr(
+                        $"[TXT] Candidate #{candidatesScanned}: " +
+                        $"'{name}', PID={inf.PathId}, " +
+                        $"TypeID={inf.TypeId}");
+
+                    if (!string.Equals(
+                        name.Trim(),
+                        targetName,
+                        StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    afie = inf;
+                    atvf = candidate;
+
+                    DebugStr(
+                        $"[TXT] Found TXT target by name: " +
+                        $"'{name}', PID={inf.PathId}, " +
+                        $"TypeID={inf.TypeId}");
+
+                    if (inf.TypeId == 49)
+                    {
+                        DebugStr(
+                            "[TXT] Target is TextAsset (TypeID=49); " +
+                            "using raw text import.");
+
+                        return ImportTextAssetRaw(
+                            inputFile,
+                            atvf,
+                            afie,
+                            out originalSerializedData,
+                            out rawReplacementData);
+                    }
+
+                    if (inf.TypeId == 114)
+                    {
+                        ushort monoId =
+                            assetInst.file.GetScriptIndex(
+                                inf);
+
+                        DebugStr(
+                            $"[TXT] Target is MonoBehaviour; " +
+                            $"MonoScriptIndex={monoId} " +
+                            $"(0x{monoId:X4})");
+
+                        AssetsTools.NET.AssetTypeValueField modifiedBaseField;
+                        byte[] monoOriginalData;
+
+                        if (!ImportMonoBehaviourCustom(
+                            inputFile,
+                            am,
+                            afie,
+                            assetInst,
+                            assetfile_name,
+                            out modifiedBaseField,
+                            out rawReplacementData,
+                            out monoOriginalData))
+                        {
+                            return false;
+                        }
+
+                        atvf =
+                            modifiedBaseField;
+
+                        originalSerializedData =
+                            monoOriginalData;
+
+                        return true;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    DisplayStr(
+                        $"[TXT] Failed reading candidate PID " +
+                        $"{inf.PathId}: " +
+                        $"{ex.GetType().Name}: {ex.Message}");
+
+                    DebugStr(
+                        ex.ToString());
+                }
+            }
+
+            DisplayStr(
+                $"[TXT] Could not find supported text asset " +
+                $"'{targetName}' in '{assetfile_name}'. " +
+                $"Candidates scanned: {candidatesScanned}.");
+
+            return false;
+        }
+
+        private static bool FindTXTFile(
+            string inputFile,
+            ref AssetsFileInstance assetInst,
+            ref AssetFileInfo afie,
+            ref AssetsTools.NET.AssetTypeValueField atvf,
+            ref AssetsManager am,
+            string asset,
+            string assetfile_name,
+            string specific_pathid)
+        {
+            byte[] ignored;
+            byte[] ignoredOriginal;
+
+            return FindTXTFile(
+                inputFile,
+                ref assetInst,
+                ref afie,
+                ref atvf,
+                ref am,
+                asset,
+                assetfile_name,
+                specific_pathid,
+                out ignored,
+                out ignoredOriginal);
+        }
+
+        private static bool FindPNGFile(
+            string inputFile,
+            ref AssetFileInfo afie,
+            ref AssetsFileInstance assetInst,
+            ref AssetsTools.NET.AssetTypeValueField atvf,
+            ref AssetsManager am,
+            string asset,
+            string assetfile_name,
+            string specific_pathid)
+        {
+            string targetName =
+                Path.GetFileNameWithoutExtension(
+                    inputFile).Trim();
+
+            long wantedPathId;
+            bool hasWantedPathId =
+                TryParsePathId(
+                    specific_pathid,
+                    out wantedPathId);
+
+            foreach (var inf in assetInst.file.GetAssetsOfType(
+                (int)AssetClassID.Texture2D))
+            {
+                var candidate =
+                    am.GetBaseField(
+                        assetInst,
+                        inf);
+
+                if (candidate == null ||
+                    candidate.IsDummy)
+                {
+                    continue;
+                }
+
+                string name =
+                    GetAssetName(candidate);
+
+                if (!string.Equals(
+                    name?.Trim(),
+                    targetName,
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (hasWantedPathId &&
+                    inf.PathId != wantedPathId)
+                {
+                    continue;
+                }
+
+                afie = inf;
+                atvf = candidate;
+
+                DebugStr(
+                    $"Found equivalent Texture2D: " +
+                    $"{name}, path ID: {inf.PathId}");
+
+                return true;
+            }
+
+            DisplayStr(
+                $"Couldn't find equivalent image for {asset} " +
+                $"(Asset: {assetfile_name}, Texture: {targetName})");
+
+            return false;
+        }
+    }
 }
