@@ -332,3 +332,5 @@ TexToolWrap/crunch/win64/TexToolWrap.dll
 TexToolWrap/ispc/win64/crnlib.dll
 TexToolWrap/ispc/win64/TexToolWrap.dll
 *.bak
+UAFGJ/classdata.tpk
+UAFGJ/test.py

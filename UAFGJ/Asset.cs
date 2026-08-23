@@ -1,10 +1,8 @@
-﻿using AssetsTools.NET.Extra;
+using AssetsTools.NET.Extra;
 using AssetsTools.NET;
-using System.Collections.Generic;
 using System;
 using System.IO;
-using Avalonia.Styling;
-using AssetsTools.NET.Texture;
+using System.Collections.Generic;
 
 namespace UAFGJ
 {
@@ -13,87 +11,129 @@ namespace UAFGJ
 		static private void HandleAsset(string asset, string input_file, string specific_pathid)
 		{
 			AssetsManager am = new AssetsManager();
-			AssetsFileInstance assetInst = am.LoadAssetsFile(asset, true);
+			AssetsFileInstance assetInst = null;
 
-			ClassPackageFile meta_class = am.LoadClassPackage("classdata.tpk");
-			ClassDatabaseFile meta_db = null;
-			if (!assetInst.file.Metadata.TypeTreeEnabled)
+			try
 			{
-				meta_db = am.LoadClassDatabaseFromPackage(assetInst.file.Metadata.UnityVersion);
-			}
-			DebugStr("Loaded classdata.tpk");
-
-			AssetTypeValueField atvf = new AssetTypeValueField(); // "baseField"
-			AssetFileInfo afie = new AssetFileInfo();
-
-			string assetfile_name = assetInst.name;
-
-			if(Path.GetExtension(input_file) != ".png")
-			{
-				// Assume .txt
-
-				if (!FindTXTFile(input_file, ref assetInst, ref afie, ref atvf, ref am, asset, assetfile_name, specific_pathid))
+				assetInst = am.LoadAssetsFile(asset, true);
+				if (assetInst == null)
 				{
-					DisplayStr("Failed to replace TXT!");
+					DisplayStr("Could not load assets file: " + asset);
+					return;
 				}
-				return;
-			}
 
-			// PNG
+				if (!File.Exists("classdata.tpk"))
+				{
+					DisplayStr("classdata.tpk not found!");
+					return;
+				}
 
-			FindPNGFile(input_file, ref afie, ref assetInst, ref atvf, ref am, asset, assetfile_name, specific_pathid);
+				ClassPackageFile meta_class = am.LoadClassPackage("classdata.tpk");
+				ClassDatabaseFile meta_db = null;
+				if (!assetInst.file.Metadata.TypeTreeEnabled)
+					meta_db = am.LoadClassDatabaseFromPackage(assetInst.file.Metadata.UnityVersion);
 
-			if (afie == null)
-			{
-				DisplayStr("AFIE is null!");
-				return;
-			}
+				DebugStr("Loaded classdata.tpk");
 
-			if (atvf == null)
-			{
-				DisplayStr("ID is null!");
-				return;
-			}
+				AssetsTools.NET.AssetTypeValueField atvf = null;
+				AssetFileInfo afie = null;
+				byte[] rawReplacementData = null;
+				byte[] originalSerializedData = null;
 
-			/* Save the asset file */
+				if (!string.Equals(Path.GetExtension(input_file), ".png", StringComparison.OrdinalIgnoreCase))
+				{
+					if (!FindTXTFile(
+						input_file,
+						ref assetInst,
+						ref afie,
+						ref atvf,
+						ref am,
+						asset,
+						assetInst.name,
+						specific_pathid,
+						out rawReplacementData,
+						out originalSerializedData))
+					{
+						DisplayStr("Failed to replace TXT!");
+						return;
+					}
+				}
+				else
+				{
+					if (!FindPNGFile(
+						input_file,
+						ref afie,
+						ref assetInst,
+						ref atvf,
+						ref am,
+						asset,
+						assetInst.name,
+						specific_pathid))
+					{
+						return;
+					}
 
-			// buffer
-			var newGoBytes = atvf.WriteToByteArray();
+					int format = atvf["m_TextureFormat"].AsInt;
 
-			if (newGoBytes == null || newGoBytes.Length == 0)
-			{
-				DisplayStr("Null/invalid buffer!");
-				return;
-			}
+					if (!ImportTexturesCustom(ref atvf, input_file, format))
+					{
+						DisplayStr("Could not import PNG!");
+						return;
+					}
 
-			var repl = new AssetsReplacerFromMemory(afie.PathId, (int)afie.TypeId, 0xFFFF, newGoBytes);
+					rawReplacementData = atvf.WriteToByteArray();
+				}
 
-			if (repl == null || repl.ToString().Length == 0)
-			{
-				DisplayStr("The asset replacer was null for " + asset + " (Asset: " + assetfile_name + ", InputFile: " + input_file + ")");
-				return;
-			}
+				if (afie == null || rawReplacementData == null || rawReplacementData.Length == 0)
+				{
+					DisplayStr("Invalid replacement state.");
+					return;
+				}
 
-			// Don't use the same name, because UABEA doesn't support overwriting files(?)
-			string fake_name = asset + "_temp";
-			using (var stream = File.OpenWrite(fake_name))
-			{
+				ushort monoId = assetInst.file.GetScriptIndex(afie);
+				DebugStr($"[ASSET] Resolved MonoScript index: {monoId} (0x{monoId:X4}) for PID={afie.PathId}");
+
+				var repl = new AssetsReplacerFromMemory(
+					afie.PathId,
+					(int)afie.TypeId,
+					monoId,
+					rawReplacementData);
+
+				string fakeName = asset + "_temp";
+
+				DebugStr("[ASSET] Writing replacement to temporary file: " + fakeName);
+
+				using (var stream = new FileStream(
+					fakeName,
+					FileMode.Create,
+					FileAccess.Write,
+					FileShare.None))
 				using (var writer = new AssetsFileWriter(stream))
 				{
-					assetInst.file.Write(writer, 0, new List<AssetsReplacer>() { repl });
+					assetInst.file.Write(
+						writer,
+						0,
+						new List<AssetsReplacer> { repl });
+
 				}
+
+				// The original file is still held by AssetsTools until unload.
+				am.UnloadAllAssetsFiles(true);
+
+				DebugStr("[ASSET] Handles released; replacing original file.");
+				File.Move(fakeName, asset, true);
+
+				DisplayStr("Successfully replaced asset!");
 			}
-
-			string real_name = asset;
-
-			// Unload everything
-			if (!am.UnloadAllAssetsFiles(true))
+			catch (Exception ex)
 			{
-				DisplayStr("Could not unload all assets!");
+				DisplayStr("[FATAL] Assets file handling failed: " + ex.GetType().Name + ": " + ex.Message);
+				DebugStr(ex.ToString());
 			}
-			File.Move(fake_name, real_name, true);
-
-			DisplayStr("Successfully replaced asset!");
+			finally
+			{
+				try { am.UnloadAllAssetsFiles(true); } catch { }
+			}
 		}
 	}
 }
