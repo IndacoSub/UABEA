@@ -56,8 +56,8 @@ namespace UAFGJ
             AssetsTools.NET.AssetTypeValueField baseField,
             AssetFileInfo afie,
             out byte[] originalSerializedData,
-            out byte[] replacementData)
-        {
+            out byte[] replacementData) {
+
             originalSerializedData =
                 Array.Empty<byte>();
 
@@ -101,43 +101,39 @@ namespace UAFGJ
             //
             //   m_Name
             //   m_Script
-            //
-            // The external .txt file is raw text, NOT a UABEA
-            // structured dump.
             // --------------------------------------------------------
 
+            AssetsTools.NET.AssetTypeValueField nameField;
             AssetsTools.NET.AssetTypeValueField scriptField;
 
             try
             {
-                scriptField =
-                    baseField["m_Script"];
+                nameField = baseField["m_Name"];
+                scriptField = baseField["m_Script"];
             }
             catch (Exception ex)
             {
                 DebugStr(
-                    $"[TXT] Could not access TextAsset.m_Script " +
+                    $"[TXT] Could not access TextAsset fields " +
                     $"for PID={afie.PathId}: {ex}");
 
                 return false;
             }
 
-            if (scriptField == null ||
+            if (nameField == null ||
+                nameField.IsDummy ||
+                scriptField == null ||
                 scriptField.IsDummy)
             {
                 DebugStr(
                     $"[TXT] TextAsset PID={afie.PathId} " +
-                    "does not have a valid m_Script field.");
+                    "does not have valid m_Name/m_Script fields.");
 
                 return false;
             }
 
             // --------------------------------------------------------
-            // Read raw text.
-            //
-            // UTF-8 BOM is handled automatically by utf-8-sig.
-            // This also avoids leaving an accidental BOM in the
-            // serialized TextAsset string.
+            // Read input.
             // --------------------------------------------------------
 
             string text;
@@ -159,24 +155,140 @@ namespace UAFGJ
                 return false;
             }
 
-            // Remove a BOM if the decoded string contains one.
+            // Remove BOM.
             if (text.Length > 0 &&
                 text[0] == '\uFEFF')
             {
                 text = text.Substring(1);
             }
 
+            // --------------------------------------------------------
+            // Detect UABEA Export Dump.
+            //
+            // Supported:
+            //
+            //   0 TextAsset Base
+            //    1 string m_Name = "English"
+            //    1 string m_Script = "...."
+            //
+            // Otherwise the file is treated as raw TextAsset text.
+            // --------------------------------------------------------
+
+            bool looksLikeExportDump =
+                text.StartsWith(
+                    "0 TextAsset Base",
+                    StringComparison.Ordinal);
+
+            if (looksLikeExportDump)
+            {
+                DebugStr(
+                    "[TXT] Detected UABEA TextAsset Export Dump.");
+
+                string[] lines =
+                    text.Replace("\r\n", "\n")
+                        .Replace("\r", "\n")
+                        .Split('\n');
+
+                string dumpedName = null;
+                string dumpedScript = null;
+
+                foreach (string rawLine in lines)
+                {
+                    string line = rawLine;
+
+                    // ----------------------------------------------------
+                    // m_Name
+                    // ----------------------------------------------------
+
+                    const string namePrefix =
+                        " 1 string m_Name = ";
+
+                    if (line.StartsWith(
+                        namePrefix,
+                        StringComparison.Ordinal))
+                    {
+                        string value =
+                            line.Substring(
+                                namePrefix.Length).Trim();
+
+                        dumpedName =
+                            ParseDumpString(value);
+
+                        continue;
+                    }
+
+                    // ----------------------------------------------------
+                    // m_Script
+                    // ----------------------------------------------------
+
+                    const string scriptPrefix =
+                        " 1 string m_Script = ";
+
+                    if (line.StartsWith(
+                        scriptPrefix,
+                        StringComparison.Ordinal))
+                    {
+                        string value =
+                            line.Substring(
+                                scriptPrefix.Length).Trim();
+
+                        dumpedScript =
+                            ParseDumpString(value);
+
+                        continue;
+                    }
+                }
+
+                if (dumpedScript == null)
+                {
+                    DisplayStr(
+                        "[TXT] File looks like a UABEA TextAsset Export Dump " +
+                        "but m_Script could not be parsed.");
+
+                    return false;
+                }
+
+                if (dumpedName != null)
+                {
+                    try
+                    {
+                        nameField.AsString = dumpedName;
+
+                        DebugStr(
+                            $"[TXT] Imported m_Name from dump: '{dumpedName}'");
+                    }
+                    catch (Exception ex)
+                    {
+                        DebugStr(
+                            $"[TXT] Failed assigning m_Name from dump: {ex}");
+
+                        return false;
+                    }
+                }
+
+                text = dumpedScript;
+
+                DebugStr(
+                    $"[TXT] Extracted m_Script from UABEA dump. " +
+                    $"Length={text.Length}");
+            }
+            else
+            {
+                DebugStr(
+                    "[TXT] Input is raw TextAsset text; no dump wrapper detected.");
+            }
+
+            // --------------------------------------------------------
+            // Assign m_Script.
+            // --------------------------------------------------------
+
             DebugStr(
-                $"[TXT] Original TextAsset text length=" +
+                $"[TXT] Original TextAsset m_Script length=" +
                 $"{scriptField.AsString?.Length ?? 0}");
 
             DebugStr(
-                $"[TXT] New TextAsset text length=" +
+                $"[TXT] New TextAsset m_Script length=" +
                 $"{text.Length}");
-
-            // --------------------------------------------------------
-            // Replace m_Script directly.
-            // --------------------------------------------------------
 
             try
             {

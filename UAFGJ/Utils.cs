@@ -717,8 +717,8 @@ namespace UAFGJ
                     {
                         throw new InvalidDataException(
                             $"FINAL CHECK: string mismatch at '{targetName}': " +
-                            $"dump='{expectedString}' " +
-                            $"actual='{actualString}'.");
+                            $"dumpLength={expectedString?.Length ?? 0}, " +
+                            $"actualLength={actualString?.Length ?? 0}.");
                     }
 
                     continue;
