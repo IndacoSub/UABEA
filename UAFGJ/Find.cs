@@ -694,62 +694,198 @@ namespace UAFGJ
             ref AssetsManager am,
             string asset,
             string assetfile_name,
-            string specific_pathid)
-        {
+            string specificPathId) {
+
+            if (assetInst == null)
+            {
+                DisplayStr(
+                    "[PNG] AssetsFileInstance is null.");
+
+                return false;
+            }
+
+            if (am == null)
+            {
+                DisplayStr(
+                    "[PNG] AssetsManager is null.");
+
+                return false;
+            }
+
+            if (!File.Exists(inputFile))
+            {
+                DisplayStr(
+                    $"[PNG] Replacement file does not exist: {inputFile}");
+
+                return false;
+            }
+
             string targetName =
                 Path.GetFileNameWithoutExtension(
                     inputFile).Trim();
 
             long wantedPathId;
+
             bool hasWantedPathId =
                 TryParsePathId(
-                    specific_pathid,
+                    specificPathId,
                     out wantedPathId);
+
+            // ========================================================
+            // PATH ID SEARCH
+            //
+            // If a PathID was supplied, search the Texture2D assets
+            // by PID FIRST.
+            //
+            // Do NOT require the texture name to match the PNG name.
+            // ========================================================
+
+            if (hasWantedPathId)
+            {
+                DebugStr(
+                    $"[PNG] Searching Texture2D assets in " +
+                    $"'{assetfile_name}' for exact PID " +
+                    $"{wantedPathId}");
+
+                AssetFileInfo exactMatch =
+                    assetInst.file.AssetInfos.FirstOrDefault(
+                        a =>
+                            a.PathId == wantedPathId &&
+                            a.TypeId == (int)AssetClassID.Texture2D);
+
+                if (exactMatch == null)
+                {
+                    DisplayStr(
+                        $"[PNG] Could not find Texture2D " +
+                        $"with path ID {wantedPathId}.");
+
+                    return false;
+                }
+
+                try
+                {
+                    var candidate =
+                        am.GetBaseField(
+                            assetInst,
+                            exactMatch);
+
+                    if (candidate == null ||
+                        candidate.IsDummy)
+                    {
+                        DisplayStr(
+                            $"[PNG] Texture2D PID {wantedPathId} " +
+                            "returned a null/dummy BaseField.");
+
+                        return false;
+                    }
+
+                    afie = exactMatch;
+                    atvf = candidate;
+
+                    string name =
+                        GetAssetName(candidate);
+
+                    DebugStr(
+                        $"[PNG] Found Texture2D by exact PID: " +
+                        $"PID={exactMatch.PathId}, " +
+                        $"Name='{name}', " +
+                        $"TypeID={exactMatch.TypeId}");
+
+                    // The filename does NOT have to equal m_Name.
+                    DebugStr(
+                        $"[PNG] Importing '{inputFile}' into " +
+                        $"Texture2D '{name}'.");
+
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    DisplayStr(
+                        $"[PNG] Failed reading Texture2D PID " +
+                        $"{wantedPathId}: " +
+                        $"{ex.GetType().Name}: {ex.Message}");
+
+                    DebugStr(
+                        ex.ToString());
+
+                    return false;
+                }
+            }
+
+            // ========================================================
+            // FALLBACK BY NAME
+            //
+            // No PathID supplied.
+            // Search Texture2D by m_Name.
+            // ========================================================
+
+            DebugStr(
+                $"[PNG] No valid PathID supplied. " +
+                $"Searching Texture2D by name '{targetName}'.");
+
+            int candidatesScanned = 0;
 
             foreach (var inf in assetInst.file.GetAssetsOfType(
                 (int)AssetClassID.Texture2D))
             {
-                var candidate =
-                    am.GetBaseField(
-                        assetInst,
-                        inf);
+                candidatesScanned++;
 
-                if (candidate == null ||
-                    candidate.IsDummy)
+                try
                 {
-                    continue;
+                    var candidate =
+                        am.GetBaseField(
+                            assetInst,
+                            inf);
+
+                    if (candidate == null ||
+                        candidate.IsDummy)
+                    {
+                        continue;
+                    }
+
+                    string name =
+                        GetAssetName(candidate);
+
+                    DebugStr(
+                        $"[PNG] Candidate #{candidatesScanned}: " +
+                        $"Name='{name}', PID={inf.PathId}");
+
+                    if (!string.Equals(
+                        name?.Trim(),
+                        targetName,
+                        StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    afie = inf;
+                    atvf = candidate;
+
+                    DebugStr(
+                        $"[PNG] Found Texture2D by name: " +
+                        $"Name='{name}', PID={inf.PathId}");
+
+                    return true;
                 }
-
-                string name =
-                    GetAssetName(candidate);
-
-                if (!string.Equals(
-                    name?.Trim(),
-                    targetName,
-                    StringComparison.OrdinalIgnoreCase))
+                catch (Exception ex)
                 {
-                    continue;
+                    DebugStr(
+                        $"[PNG] Failed reading candidate PID " +
+                        $"{inf.PathId}: " +
+                        $"{ex.GetType().Name}: {ex.Message}");
+
+                    DebugStr(
+                        ex.ToString());
                 }
-
-                if (hasWantedPathId &&
-                    inf.PathId != wantedPathId)
-                {
-                    continue;
-                }
-
-                afie = inf;
-                atvf = candidate;
-
-                DebugStr(
-                    $"Found equivalent Texture2D: " +
-                    $"{name}, path ID: {inf.PathId}");
-
-                return true;
             }
 
             DisplayStr(
-                $"Couldn't find equivalent image for {asset} " +
-                $"(Asset: {assetfile_name}, Texture: {targetName})");
+                $"[PNG] Couldn't find equivalent image for " +
+                $"{asset} " +
+                $"(Asset: {assetfile_name}, " +
+                $"Texture: {targetName}). " +
+                $"Texture2D candidates scanned: " +
+                $"{candidatesScanned}");
 
             return false;
         }
