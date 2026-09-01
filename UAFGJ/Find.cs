@@ -55,8 +55,10 @@ namespace UAFGJ
             string inputFile,
             AssetsTools.NET.AssetTypeValueField baseField,
             AssetFileInfo afie,
+            string fileKind,
             out byte[] originalSerializedData,
-            out byte[] replacementData) {
+            out byte[] replacementData)
+        {
 
             originalSerializedData =
                 Array.Empty<byte>();
@@ -347,6 +349,7 @@ namespace UAFGJ
             string asset,
             string assetfile_name,
             string specific_pathid,
+            string fileKind,
             out byte[] rawReplacementData,
             out byte[] originalSerializedData)
         {
@@ -355,6 +358,10 @@ namespace UAFGJ
 
             originalSerializedData =
                 Array.Empty<byte>();
+
+            // ============================================================
+            // BASIC VALIDATION
+            // ============================================================
 
             if (assetInst == null)
             {
@@ -375,28 +382,76 @@ namespace UAFGJ
             if (!File.Exists(inputFile))
             {
                 DebugStr(
-                    $"[TXT] Replacement file does not exist: " +
-                    $"{inputFile}");
+                    $"[TXT] Replacement file does not exist: {inputFile}");
 
                 return false;
             }
 
-            string targetName =
-                Path.GetFileNameWithoutExtension(
-                    inputFile).Trim();
+            // ============================================================
+            // DEFAULT KIND
+            // ============================================================
+
+            if (string.IsNullOrWhiteSpace(fileKind))
+            {
+                fileKind =
+                    "MONOBEHAVIOUR_FULL_CHECKED";
+
+                DebugStr(
+                    "[TXT] fileKind is empty; " +
+                    "defaulting to MONOBEHAVIOUR_FULL_CHECKED.");
+            }
+
+            // ============================================================
+            // VALID KIND
+            // ============================================================
+
+            switch (fileKind)
+            {
+                case "MONOBEHAVIOUR_TEXT":
+                case "MONOBEHAVIOUR_TEXT_CHECKED":
+                case "MONOBEHAVIOUR_FONT":
+                case "MONOBEHAVIOUR_FONT_CHECKED":
+                case "MONOBEHAVIOUR_FULL":
+                case "MONOBEHAVIOUR_FULL_CHECKED":
+                    break;
+
+                default:
+                    DisplayStr(
+                        $"[TXT] Unsupported fileKind '{fileKind}'.");
+
+                    return false;
+            }
+
+            DebugStr(
+                $"[TXT] Requested fileKind='{fileKind}'.");
+
+            // ============================================================
+            // PATH ID
+            // ============================================================
 
             long wantedPathId;
+
             bool hasWantedPathId =
                 TryParsePathId(
                     specific_pathid,
                     out wantedPathId);
 
-            // ========================================================
+            // ============================================================
+            // ============================================================
             // PATH ID SEARCH
             //
-            // If a PathID was supplied, search ALL assets.
-            // This is the important fix for TextAsset PID 122.
-            // ========================================================
+            // PID supplied:
+            // PID has absolute priority.
+            //
+            // IMPORTANT:
+            //
+            // For MONOBEHAVIOUR_TEXT / TEXT_CHECKED we MUST NOT call
+            // GetBaseField() before checking TypeID.
+            //
+            // Some TypeID 114 objects have a dummy BaseField even though
+            // their raw serialized payload is perfectly usable.
+            // ============================================================
+            // ============================================================
 
             if (hasWantedPathId)
             {
@@ -417,123 +472,385 @@ namespace UAFGJ
                     return false;
                 }
 
-                afie = exactMatch;
-
-                AssetsTools.NET.AssetTypeValueField candidate;
-
-                try
-                {
-                    candidate =
-                        am.GetBaseField(
-                            assetInst,
-                            afie);
-                }
-                catch (Exception ex)
-                {
-                    DisplayStr(
-                        $"[TXT] Failed reading asset PID " +
-                        $"{wantedPathId}: " +
-                        $"{ex.GetType().Name}: {ex.Message}");
-
-                    DebugStr(ex.ToString());
-
-                    return false;
-                }
-
-                if (candidate == null ||
-                    candidate.IsDummy)
-                {
-                    DisplayStr(
-                        $"[TXT] Asset PID {wantedPathId} " +
-                        "returned a null/dummy BaseField.");
-
-                    return false;
-                }
-
-                string name =
-                    GetAssetName(candidate);
+                afie =
+                    exactMatch;
 
                 DebugStr(
-                    $"Found TXT target: " +
+                    $"[TXT] Exact PID found: " +
                     $"PID={afie.PathId}, " +
-                    $"Name='{name}', " +
                     $"TypeID={afie.TypeId}");
 
-                // ----------------------------------------------------
-                // Supported text asset types.
+                // ========================================================
+                // TEXTASSET - TYPEID 49
                 //
-                // 49  = TextAsset
-                // 114 = MonoBehaviour
-                // ----------------------------------------------------
+                // TextAsset still uses the normal BaseField importer.
+                // ========================================================
 
                 if (afie.TypeId == 49)
                 {
                     DebugStr(
-                        "[TXT] Target is TextAsset (TypeID=49); " +
-                        "MonoScript validation is not applicable.");
+                        "[TXT] Target is TextAsset (TypeID=49).");
 
-                    atvf = candidate;
+                    AssetsTools.NET.AssetTypeValueField textAssetField;
+
+                    try
+                    {
+                        textAssetField =
+                            am.GetBaseField(
+                                assetInst,
+                                afie);
+                    }
+                    catch (Exception ex)
+                    {
+                        DisplayStr(
+                            $"[TXT] Failed reading TextAsset PID " +
+                            $"{wantedPathId}: " +
+                            $"{ex.GetType().Name}: {ex.Message}");
+
+                        DebugStr(
+                            ex.ToString());
+
+                        return false;
+                    }
+
+                    if (textAssetField == null ||
+                        textAssetField.IsDummy)
+                    {
+                        DisplayStr(
+                            $"[TXT] TextAsset PID {wantedPathId} " +
+                            "returned a null/dummy BaseField.");
+
+                        return false;
+                    }
+
+                    atvf =
+                        textAssetField;
+
+                    string textAssetName =
+                        GetAssetName(
+                            textAssetField);
+
+                    DebugStr(
+                        $"[TXT] Found TextAsset by exact PID: " +
+                        $"PID={afie.PathId}, " +
+                        $"Name='{textAssetName}', " +
+                        $"TypeID={afie.TypeId}");
 
                     return ImportTextAssetRaw(
                         inputFile,
                         atvf,
                         afie,
+                        fileKind,
                         out originalSerializedData,
                         out rawReplacementData);
                 }
 
+                // ========================================================
+                // MONOBEHAVIOUR - TYPEID 114
+                // ========================================================
+
                 if (afie.TypeId == 114)
                 {
-                    ushort monoId =
-                        assetInst.file.GetScriptIndex(
-                            afie);
-
                     DebugStr(
                         $"[TXT] Target is MonoBehaviour " +
-                        $"(TypeID=114), " +
-                        $"MonoScriptIndex={monoId} " +
-                        $"(0x{monoId:X4}).");
+                        $"(TypeID=114), PID={afie.PathId}.");
 
-                    AssetsTools.NET.AssetTypeValueField modifiedBaseField;
-                    byte[] monoOriginalData;
+                    // ----------------------------------------------------
+                    // TEXT-ONLY RAW PATH
+                    //
+                    // NO GetBaseField()
+                    //
+                    // This is the critical fix for TypeTree-dummy
+                    // MonoBehaviours.
+                    // ----------------------------------------------------
 
-                    if (!ImportMonoBehaviourCustom(
-                        inputFile,
-                        am,
-                        afie,
-                        assetInst,
-                        assetfile_name,
-                        out modifiedBaseField,
-                        out rawReplacementData,
-                        out monoOriginalData))
+                    if (fileKind == "MONOBEHAVIOUR_TEXT")
                     {
+                        DebugStr(
+                            "[TXT] Kind=MONOBEHAVIOUR_TEXT. " +
+                            "Using RAW m_text replacement.");
+
+                        AssetsTools.NET.AssetTypeValueField modifiedBaseField;
+
+                        byte[] monoOriginalData;
+
+                        bool success =
+                            ImportMonoBehaviourTextOnly(
+                                inputFile,
+                                am,
+                                afie,
+                                assetInst,
+                                assetfile_name,
+                                out modifiedBaseField,
+                                out rawReplacementData,
+                                out monoOriginalData);
+
+                        if (!success)
+                        {
+                            return false;
+                        }
+
+                        // Raw TEXT importer deliberately returns null BaseField.
+                        atvf =
+                            modifiedBaseField;
+
+                        originalSerializedData =
+                            monoOriginalData;
+
+                        DebugStr(
+                            $"[TXT] MONOBEHAVIOUR_TEXT import succeeded. " +
+                            $"PID={afie.PathId}");
+
+                        return true;
+                    }
+
+                    // ----------------------------------------------------
+                    // TEXT-ONLY CHECKED
+                    //
+                    // Same RAW replacement path.
+                    //
+                    // Do NOT require a valid BaseField here.
+                    // ----------------------------------------------------
+
+                    if (fileKind == "MONOBEHAVIOUR_TEXT_CHECKED")
+                    {
+                        DebugStr(
+                            "[TXT] Kind=MONOBEHAVIOUR_TEXT_CHECKED. " +
+                            "Using RAW m_text replacement.");
+
+                        AssetsTools.NET.AssetTypeValueField modifiedBaseField;
+
+                        byte[] monoOriginalData;
+
+                        bool success =
+                            ImportMonoBehaviourTextOnlyChecked(
+                                inputFile,
+                                am,
+                                afie,
+                                assetInst,
+                                assetfile_name,
+                                out modifiedBaseField,
+                                out rawReplacementData,
+                                out monoOriginalData);
+
+                        if (!success)
+                        {
+                            return false;
+                        }
+
+                        // Raw TEXT importer deliberately returns null BaseField.
+                        atvf =
+                            modifiedBaseField;
+
+                        originalSerializedData =
+                            monoOriginalData;
+
+                        DebugStr(
+                            $"[TXT] MONOBEHAVIOUR_TEXT_CHECKED import succeeded. " +
+                            $"PID={afie.PathId}");
+
+                        return true;
+                    }
+
+                    // ----------------------------------------------------
+                    // FULL MODES
+                    //
+                    // These require a real BaseField / TypeTree.
+                    // ----------------------------------------------------
+
+                    AssetsTools.NET.AssetTypeValueField monoBaseField;
+
+                    try
+                    {
+                        monoBaseField =
+                            am.GetBaseField(
+                                assetInst,
+                                afie);
+                    }
+                    catch (Exception ex)
+                    {
+                        DisplayStr(
+                            $"[TXT] Failed reading MonoBehaviour PID " +
+                            $"{wantedPathId}: " +
+                            $"{ex.GetType().Name}: {ex.Message}");
+
+                        DebugStr(
+                            ex.ToString());
+
+                        return false;
+                    }
+
+                    if (monoBaseField == null ||
+                        monoBaseField.IsDummy)
+                    {
+                        DisplayStr(
+                            $"[TXT] MonoBehaviour PID {wantedPathId} " +
+                            "returned a null/dummy BaseField. " +
+                            $"fileKind='{fileKind}' requires the full TypeTree.");
+
                         return false;
                     }
 
                     atvf =
-                        modifiedBaseField;
+                        monoBaseField;
 
-                    originalSerializedData =
-                        monoOriginalData;
+                    string monoName =
+                        GetAssetName(
+                            monoBaseField);
 
-                    return true;
+                    DebugStr(
+                        $"[TXT] Found MonoBehaviour by exact PID: " +
+                        $"PID={afie.PathId}, " +
+                        $"Name='{monoName}', " +
+                        $"TypeID={afie.TypeId}");
+
+                    ushort monoId;
+
+                    try
+                    {
+                        monoId =
+                            assetInst.file.GetScriptIndex(
+                                afie);
+                    }
+                    catch (Exception ex)
+                    {
+                        DebugStr(
+                            $"[TXT] Could not read MonoScriptIndex " +
+                            $"for PID={afie.PathId}: {ex}");
+
+                        monoId = 0;
+                    }
+
+                    DebugStr(
+                        $"[TXT] MonoScriptIndex={monoId} " +
+                        $"(0x{monoId:X4}).");
+
+                    // ====================================================
+                    // FULL / FONT
+                    // ====================================================
+
+                    if (fileKind == "MONOBEHAVIOUR_FONT" ||
+                        fileKind == "MONOBEHAVIOUR_FULL")
+                    {
+                        DebugStr(
+                            $"[TXT] Kind={fileKind}. " +
+                            "Using FULL unchecked MonoBehaviour import.");
+
+                        AssetsTools.NET.AssetTypeValueField modifiedBaseField;
+
+                        byte[] monoOriginalData;
+
+                        bool success =
+                            ImportMonoBehaviourFull(
+                                inputFile,
+                                am,
+                                afie,
+                                assetInst,
+                                assetfile_name,
+                                out modifiedBaseField,
+                                out rawReplacementData,
+                                out monoOriginalData);
+
+                        if (!success)
+                        {
+                            return false;
+                        }
+
+                        atvf =
+                            modifiedBaseField;
+
+                        originalSerializedData =
+                            monoOriginalData;
+
+                        DebugStr(
+                            $"[TXT] {fileKind} import succeeded. " +
+                            $"PID={afie.PathId}");
+
+                        return true;
+                    }
+
+                    // ====================================================
+                    // FULL CHECKED / FONT CHECKED
+                    // ====================================================
+
+                    if (fileKind == "MONOBEHAVIOUR_FONT_CHECKED" ||
+                        fileKind == "MONOBEHAVIOUR_FULL_CHECKED")
+                    {
+                        DebugStr(
+                            $"[TXT] Kind={fileKind}. " +
+                            "Using FULL checked MonoBehaviour import.");
+
+                        AssetsTools.NET.AssetTypeValueField modifiedBaseField;
+
+                        byte[] monoOriginalData;
+
+                        bool success =
+                            ImportMonoBehaviourFullChecked(
+                                inputFile,
+                                am,
+                                afie,
+                                assetInst,
+                                assetfile_name,
+                                out modifiedBaseField,
+                                out rawReplacementData,
+                                out monoOriginalData);
+
+                        if (!success)
+                        {
+                            return false;
+                        }
+
+                        atvf =
+                            modifiedBaseField;
+
+                        originalSerializedData =
+                            monoOriginalData;
+
+                        DebugStr(
+                            $"[TXT] {fileKind} import succeeded. " +
+                            $"PID={afie.PathId}");
+
+                        return true;
+                    }
+
+                    DisplayStr(
+                        $"[TXT] Unsupported MonoBehaviour fileKind " +
+                        $"'{fileKind}'.");
+
+                    return false;
                 }
 
+                // ========================================================
+                // UNSUPPORTED TYPE
+                // ========================================================
+
                 DisplayStr(
-                    $"[TXT] Asset PID={afie.PathId}, " +
-                    $"Name='{name}' has unsupported TypeID={afie.TypeId}. " +
+                    $"[TXT] Asset PID={afie.PathId} has unsupported " +
+                    $"TypeID={afie.TypeId}. " +
                     "TXT import supports TextAsset (49) and " +
                     "MonoBehaviour (114).");
 
                 return false;
             }
 
-            // ========================================================
+            // ============================================================
+            // ============================================================
             // FALLBACK BY NAME
             //
-            // No PathID was supplied.
-            // Search supported text asset types only.
-            // ========================================================
+            // Only used when no valid PID was supplied.
+            //
+            // For name lookup we necessarily need a BaseField because
+            // m_Name is read from the serialized object structure.
+            //
+            // Therefore a TypeTree-dummy MonoBehaviour cannot be found
+            // by name through this fallback. Such an object should be
+            // addressed with its exact PID.
+            // ============================================================
+            // ============================================================
+
+            string targetName =
+                Path.GetFileNameWithoutExtension(
+                    inputFile).Trim();
 
             DebugStr(
                 $"[TXT] No valid PathID supplied. " +
@@ -544,7 +861,7 @@ namespace UAFGJ
 
             foreach (var inf in assetInst.file.AssetInfos)
             {
-                // Only types for which this method knows how to import TXT.
+                // Only supported TXT types.
                 if (inf.TypeId != 49 &&
                     inf.TypeId != 114)
                 {
@@ -553,80 +870,150 @@ namespace UAFGJ
 
                 candidatesScanned++;
 
+                AssetsTools.NET.AssetTypeValueField candidate;
+
                 try
                 {
-                    var candidate =
+                    candidate =
                         am.GetBaseField(
                             assetInst,
                             inf);
-
-                    if (candidate == null ||
-                        candidate.IsDummy)
-                    {
-                        continue;
-                    }
-
-                    string name =
-                        GetAssetName(candidate);
-
+                }
+                catch (Exception ex)
+                {
                     DebugStr(
-                        $"[TXT] Candidate #{candidatesScanned}: " +
-                        $"'{name}', PID={inf.PathId}, " +
-                        $"TypeID={inf.TypeId}");
+                        $"[TXT] Failed reading candidate PID " +
+                        $"{inf.PathId}: " +
+                        $"{ex.GetType().Name}: {ex.Message}");
 
-                    if (!string.Equals(
-                        name.Trim(),
-                        targetName,
-                        StringComparison.OrdinalIgnoreCase))
-                    {
-                        continue;
-                    }
+                    continue;
+                }
 
-                    afie = inf;
-                    atvf = candidate;
-
+                if (candidate == null ||
+                    candidate.IsDummy)
+                {
                     DebugStr(
-                        $"[TXT] Found TXT target by name: " +
-                        $"'{name}', PID={inf.PathId}, " +
-                        $"TypeID={inf.TypeId}");
+                        $"[TXT] Candidate PID={inf.PathId} " +
+                        "has null/dummy BaseField; skipping name lookup.");
 
-                    if (inf.TypeId == 49)
+                    continue;
+                }
+
+                string name =
+                    GetAssetName(
+                        candidate);
+
+                DebugStr(
+                    $"[TXT] Candidate #{candidatesScanned}: " +
+                    $"Name='{name}', " +
+                    $"PID={inf.PathId}, " +
+                    $"TypeID={inf.TypeId}");
+
+                if (!string.Equals(
+                    name?.Trim(),
+                    targetName,
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                // ========================================================
+                // FOUND BY NAME
+                // ========================================================
+
+                afie =
+                    inf;
+
+                atvf =
+                    candidate;
+
+                DebugStr(
+                    $"[TXT] Found TXT target by name: " +
+                    $"'{name}', " +
+                    $"PID={afie.PathId}, " +
+                    $"TypeID={afie.TypeId}");
+
+                // ========================================================
+                // TEXTASSET
+                // ========================================================
+
+                if (inf.TypeId == 49)
+                {
+                    DebugStr(
+                        "[TXT] Target is TextAsset (TypeID=49); " +
+                        "using existing TextAsset importer.");
+
+                    return ImportTextAssetRaw(
+                        inputFile,
+                        atvf,
+                        afie,
+                        fileKind,
+                        out originalSerializedData,
+                        out rawReplacementData);
+                }
+
+                // ========================================================
+                // MONOBEHAVIOUR
+                // ========================================================
+
+                if (inf.TypeId == 114)
+                {
+                    DebugStr(
+                        $"[TXT] Target is MonoBehaviour " +
+                        $"(TypeID=114), PID={afie.PathId}.");
+
+                    ushort monoId;
+
+                    try
                     {
-                        DebugStr(
-                            "[TXT] Target is TextAsset (TypeID=49); " +
-                            "using raw text import.");
-
-                        return ImportTextAssetRaw(
-                            inputFile,
-                            atvf,
-                            afie,
-                            out originalSerializedData,
-                            out rawReplacementData);
-                    }
-
-                    if (inf.TypeId == 114)
-                    {
-                        ushort monoId =
+                        monoId =
                             assetInst.file.GetScriptIndex(
-                                inf);
-
+                                afie);
+                    }
+                    catch (Exception ex)
+                    {
                         DebugStr(
-                            $"[TXT] Target is MonoBehaviour; " +
-                            $"MonoScriptIndex={monoId} " +
-                            $"(0x{monoId:X4})");
+                            $"[TXT] Could not read MonoScriptIndex " +
+                            $"for PID={afie.PathId}: {ex}");
+
+                        monoId = 0;
+                    }
+
+                    DebugStr(
+                        $"[TXT] MonoScriptIndex={monoId} " +
+                        $"(0x{monoId:X4}).");
+
+                    // ----------------------------------------------------
+                    // TEXT
+                    //
+                    // Here the BaseField was only needed to FIND the
+                    // object by m_Name.
+                    //
+                    // The actual import is still RAW.
+                    // ----------------------------------------------------
+
+                    if (fileKind == "MONOBEHAVIOUR_TEXT")
+                    {
+                        DebugStr(
+                            "[TXT] Kind=MONOBEHAVIOUR_TEXT. " +
+                            "Using RAW m_text replacement.");
 
                         AssetsTools.NET.AssetTypeValueField modifiedBaseField;
+
                         byte[] monoOriginalData;
 
-                        if (!ImportMonoBehaviourCustom(
-                            inputFile,
-                            am,
-                            afie,
-                            assetInst,
-                            assetfile_name,
-                            out modifiedBaseField,
-                            out rawReplacementData,
-                            out monoOriginalData))
+                        bool success =
+                            ImportMonoBehaviourTextOnly(
+                                inputFile,
+                                am,
+                                afie,
+                                assetInst,
+                                assetfile_name,
+                                out modifiedBaseField,
+                                out rawReplacementData,
+                                out monoOriginalData);
+
+                        if (!success)
                         {
                             return false;
                         }
@@ -639,18 +1026,143 @@ namespace UAFGJ
 
                         return true;
                     }
-                }
-                catch (Exception ex)
-                {
-                    DisplayStr(
-                        $"[TXT] Failed reading candidate PID " +
-                        $"{inf.PathId}: " +
-                        $"{ex.GetType().Name}: {ex.Message}");
 
-                    DebugStr(
-                        ex.ToString());
+                    // ----------------------------------------------------
+                    // TEXT CHECKED
+                    // ----------------------------------------------------
+
+                    if (fileKind == "MONOBEHAVIOUR_TEXT_CHECKED")
+                    {
+                        DebugStr(
+                            "[TXT] Kind=MONOBEHAVIOUR_TEXT_CHECKED. " +
+                            "Using RAW m_text replacement.");
+
+                        AssetsTools.NET.AssetTypeValueField modifiedBaseField;
+
+                        byte[] monoOriginalData;
+
+                        bool success =
+                            ImportMonoBehaviourTextOnlyChecked(
+                                inputFile,
+                                am,
+                                afie,
+                                assetInst,
+                                assetfile_name,
+                                out modifiedBaseField,
+                                out rawReplacementData,
+                                out monoOriginalData);
+
+                        if (!success)
+                        {
+                            return false;
+                        }
+
+                        atvf =
+                            modifiedBaseField;
+
+                        originalSerializedData =
+                            monoOriginalData;
+
+                        return true;
+                    }
+
+                    // ----------------------------------------------------
+                    // FULL UNCHECKED
+                    // ----------------------------------------------------
+
+                    if (fileKind == "MONOBEHAVIOUR_FONT" ||
+                        fileKind == "MONOBEHAVIOUR_FULL")
+                    {
+                        DebugStr(
+                            $"[TXT] Kind={fileKind}. " +
+                            "Using FULL unchecked MonoBehaviour import.");
+
+                        AssetsTools.NET.AssetTypeValueField modifiedBaseField;
+
+                        byte[] monoOriginalData;
+
+                        bool success =
+                            ImportMonoBehaviourFull(
+                                inputFile,
+                                am,
+                                afie,
+                                assetInst,
+                                assetfile_name,
+                                out modifiedBaseField,
+                                out rawReplacementData,
+                                out monoOriginalData);
+
+                        if (!success)
+                        {
+                            return false;
+                        }
+
+                        atvf =
+                            modifiedBaseField;
+
+                        originalSerializedData =
+                            monoOriginalData;
+
+                        return true;
+                    }
+
+                    // ----------------------------------------------------
+                    // FULL CHECKED
+                    // ----------------------------------------------------
+
+                    if (fileKind == "MONOBEHAVIOUR_FONT_CHECKED" ||
+                        fileKind == "MONOBEHAVIOUR_FULL_CHECKED")
+                    {
+                        DebugStr(
+                            $"[TXT] Kind={fileKind}. " +
+                            "Using FULL checked MonoBehaviour import.");
+
+                        AssetsTools.NET.AssetTypeValueField modifiedBaseField;
+
+                        byte[] monoOriginalData;
+
+                        bool success =
+                            ImportMonoBehaviourFullChecked(
+                                inputFile,
+                                am,
+                                afie,
+                                assetInst,
+                                assetfile_name,
+                                out modifiedBaseField,
+                                out rawReplacementData,
+                                out monoOriginalData);
+
+                        if (!success)
+                        {
+                            return false;
+                        }
+
+                        atvf =
+                            modifiedBaseField;
+
+                        originalSerializedData =
+                            monoOriginalData;
+
+                        return true;
+                    }
+
+                    DisplayStr(
+                        $"[TXT] Unsupported MonoBehaviour fileKind " +
+                        $"'{fileKind}'.");
+
+                    return false;
                 }
+
+                DisplayStr(
+                    $"[TXT] Found asset by name but TypeID={inf.TypeId} " +
+                    "is unsupported.");
+
+                return false;
             }
+
+            // ============================================================
+            // NOT FOUND
+            // ============================================================
 
             DisplayStr(
                 $"[TXT] Could not find supported text asset " +
@@ -660,31 +1172,6 @@ namespace UAFGJ
             return false;
         }
 
-        private static bool FindTXTFile(
-            string inputFile,
-            ref AssetsFileInstance assetInst,
-            ref AssetFileInfo afie,
-            ref AssetsTools.NET.AssetTypeValueField atvf,
-            ref AssetsManager am,
-            string asset,
-            string assetfile_name,
-            string specific_pathid)
-        {
-            byte[] ignored;
-            byte[] ignoredOriginal;
-
-            return FindTXTFile(
-                inputFile,
-                ref assetInst,
-                ref afie,
-                ref atvf,
-                ref am,
-                asset,
-                assetfile_name,
-                specific_pathid,
-                out ignored,
-                out ignoredOriginal);
-        }
 
         private static bool FindPNGFile(
             string inputFile,
@@ -694,7 +1181,9 @@ namespace UAFGJ
             ref AssetsManager am,
             string asset,
             string assetfile_name,
-            string specificPathId) {
+            string specificPathId,
+            string fileKind)
+        {
 
             if (assetInst == null)
             {
