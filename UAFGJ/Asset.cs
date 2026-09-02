@@ -13,6 +13,9 @@ namespace UAFGJ
             AssetsManager am = new AssetsManager();
             AssetsFileInstance assetInst = null;
 
+            string tempAssetPath = asset + "_temp";
+            DeleteFileIfExists(tempAssetPath);
+
             try
             {
                 assetInst = am.LoadAssetsFile(asset, true);
@@ -103,7 +106,7 @@ namespace UAFGJ
                     monoId,
                     rawReplacementData);
 
-                string fakeName = asset + "_temp";
+                string fakeName = tempAssetPath;
 
                 DebugStr("[ASSET] Writing replacement to temporary file: " + fakeName);
 
@@ -125,7 +128,7 @@ namespace UAFGJ
                 am.UnloadAllAssetsFiles(true);
 
                 DebugStr("[ASSET] Handles released; replacing original file.");
-                File.Move(fakeName, asset, true);
+                ReplaceFileWithRetry(fakeName, asset);
 
                 DisplayStr("Successfully replaced asset!");
             }
@@ -137,6 +140,7 @@ namespace UAFGJ
             finally
             {
                 try { am.UnloadAllAssetsFiles(true); } catch { }
+                DeleteFileIfExists(tempAssetPath);
             }
         }
     }

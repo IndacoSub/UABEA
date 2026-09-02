@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
+using System.Threading;
 
 namespace UAFGJ
 {
@@ -51,8 +52,19 @@ namespace UAFGJ
                 $"[CHECK] classdata.tpk SHA256=" +
                 $"{(File.Exists("classdata.tpk") ? Sha256File("classdata.tpk") : "MISSING")}");
 
+            // Remove stale UAFGJ working files from an interrupted previous run.
+            DeleteFileIfExists(ab + "_temp");
+            DeleteFileIfExists(ab + ".uafgj_tmp");
+            DeleteFileIfExists(ab + ".new");
+
             AssetsManager am =
                 new AssetsManager();
+
+            string tempBundlePath =
+                ab + "_temp";
+
+            string finalTempPath =
+                ab + ".uafgj_tmp";
 
             try
             {
@@ -349,29 +361,6 @@ namespace UAFGJ
                 }
 
                 // ============================================================
-                // RAW TEMP BUNDLE
-                // ============================================================
-
-                string tempBundle =
-                    ab + "_temp";
-
-                if (!File.Exists(tempBundle))
-                {
-                    throw new FileNotFoundException(
-                        "Temporary bundle was not created.",
-                        tempBundle);
-                }
-
-                string rawTempSha =
-                    Sha256File(
-                        tempBundle);
-
-                DebugStr(
-                    $"[CHECK] RAW temp bundle length=" +
-                    $"{new FileInfo(tempBundle).Length} " +
-                    $"SHA256={rawTempSha}");
-
-                // ============================================================
                 // UNLOAD BEFORE FINAL PACK
                 // ============================================================
 
@@ -420,6 +409,14 @@ namespace UAFGJ
 
                 DebugStr(
                     ex.ToString());
+            }
+            finally
+            {
+                try { am.UnloadAllAssetsFiles(true); } catch { }
+                try { am.UnloadAllBundleFiles(); } catch { }
+
+                DeleteFileIfExists(tempBundlePath);
+                DeleteFileIfExists(finalTempPath);
             }
         }
 
@@ -600,7 +597,7 @@ namespace UAFGJ
             AssetsManager am = new AssetsManager();
 
             string finalTemp =
-                realName + ".new";
+                realName + ".uafgj_tmp";
 
             try
             {
@@ -642,7 +639,7 @@ namespace UAFGJ
                     Sha256File(finalTemp);
 
                 DebugStr(
-                    $"[CHECK] PACKED .new length=" +
+                    $"[CHECK] PACKED staging bundle length=" +
                     $"{new FileInfo(finalTemp).Length} " +
                     $"SHA256={finalSha}");
 
@@ -670,9 +667,9 @@ namespace UAFGJ
                     originalBundleSha,
                     StringComparison.OrdinalIgnoreCase))
                 {
-                    throw new InvalidDataException(
-                        "The final bundle SHA256 is identical to the input bundle. " +
-                        "Refusing to replace because no binary change was detected.");
+                    DebugStr(
+                        "[CHECK] Final bundle is byte-identical to the input. " +
+                        "Continuing with the requested overwrite.");
                 }
 
                 DebugStr(
@@ -686,10 +683,9 @@ namespace UAFGJ
                     $"[CHECK] OUTPUT SHA256={finalSha} " +
                     $"length={new FileInfo(finalTemp).Length}");
 
-                File.Move(
+                ReplaceFileWithRetry(
                     finalTemp,
-                    realName,
-                    true);
+                    realName);
 
                 string committedSha =
                     Sha256File(realName);
@@ -704,13 +700,9 @@ namespace UAFGJ
                     StringComparison.OrdinalIgnoreCase))
                 {
                     throw new InvalidDataException(
-                        "Committed bundle SHA256 differs from validated .new file.");
+                        "Committed bundle SHA256 differs from the validated staging file.");
                 }
 
-                if (File.Exists(fakeName))
-                {
-                    File.Delete(fakeName);
-                }
             }
             finally
             {
@@ -729,7 +721,110 @@ namespace UAFGJ
                 catch
                 {
                 }
+                DeleteFileIfExists(fakeName);
+                DeleteFileIfExists(finalTemp);
             }
+        }
+
+        private static void DeleteFileIfExists(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                return;
+
+            try
+            {
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
+            catch (Exception ex)
+            {
+                DebugStr(
+                    $"[CLEANUP] Could not delete temporary file '{path}': " +
+                    $"{ex.GetType().Name}: {ex.Message}");
+            }
+        }
+
+        private static void ReplaceFileWithRetry(
+            string sourcePath,
+            string destinationPath)
+        {
+            const int maxAttempts = 10;
+            const int delayMs = 250;
+            Exception lastError = null;
+
+            if (!File.Exists(sourcePath))
+                throw new FileNotFoundException(
+                    "Replacement file does not exist.",
+                    sourcePath);
+
+            for (int attempt = 1; attempt <= maxAttempts; attempt++)
+            {
+                try
+                {
+                    if (File.Exists(destinationPath))
+                    {
+                        try
+                        {
+                            File.Replace(
+                                sourcePath,
+                                destinationPath,
+                                null,
+                                true);
+                        }
+                        catch (PlatformNotSupportedException)
+                        {
+                            File.Move(
+                                sourcePath,
+                                destinationPath,
+                                true);
+                        }
+                        catch (NotSupportedException)
+                        {
+                            File.Move(
+                                sourcePath,
+                                destinationPath,
+                                true);
+                        }
+                        catch (IOException)
+                        {
+                            // Some filesystems do not support Replace even
+                            // though overwrite-by-move is available.
+                            File.Move(
+                                sourcePath,
+                                destinationPath,
+                                true);
+                        }
+                    }
+                    else
+                    {
+                        File.Move(
+                            sourcePath,
+                            destinationPath);
+                    }
+
+                    return;
+                }
+                catch (IOException ex)
+                {
+                    lastError = ex;
+                }
+                catch (UnauthorizedAccessException ex)
+                {
+                    lastError = ex;
+                }
+
+                if (attempt < maxAttempts)
+                {
+                    DebugStr(
+                        $"[SAVE] Destination temporarily unavailable; " +
+                        $"retry {attempt}/{maxAttempts - 1}...");
+                    Thread.Sleep(delayMs);
+                }
+            }
+
+            throw new IOException(
+                $"Could not replace '{destinationPath}' after {maxAttempts} attempts.",
+                lastError);
         }
 
         private static void ValidateBundleContainer(string bundlePath)
