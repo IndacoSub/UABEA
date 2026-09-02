@@ -12,6 +12,20 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Optional runtime backends used to generate complete MonoBehaviour TypeTrees
+         from the game's Managed DLLs or IL2CPP metadata. The core UAFGJ build
+         still uses the existing AssetsTools.NET reference from ..\Libs. -->
+    <PackageReference Include="AssetsTools.NET.MonoCecil" Version="3.0.4">
+      <IncludeAssets>runtime;build;native;contentfiles;analyzers;buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="AssetsTools.NET.Cpp2IL" Version="3.0.4">
+      <IncludeAssets>runtime;build;native;contentfiles;analyzers;buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
     <Reference Include="AssetsTools.NET">
       <HintPath>..\Libs\AssetsTools.NET.dll</HintPath>
     </Reference>

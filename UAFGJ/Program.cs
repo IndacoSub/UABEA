@@ -6,75 +6,159 @@ using UABEAvalonia;
 
 namespace UAFGJ
 {
-	partial class Program
-	{
-		static void Main(string[] args)
-		{
-			try
-			{
-				if (args == null)
-				{
-					DisplayStr("Null args!");
-					return;
-				}
+    partial class Program
+    {
+        static void Main(string[] args)
+        {
+            AppDomain.CurrentDomain.UnhandledException += CurrentDomain_UnhandledException;
+            AppDomain.CurrentDomain.ProcessExit += CurrentDomain_ProcessExit;
 
-				if (args.Length < 2)
-				{
-					DisplayStr("Usage: UAFGJ.exe <bundle/assets> <input.txt/png> [pathId]");
-					return;
-				}
+            try
+            {
+                DebugStr("[BOOT] ==================================================");
+                DebugStr("[BOOT] UAFGJ starting.");
+                DebugStr($"[BOOT] PID={Environment.ProcessId}, OS={Environment.OSVersion}, 64bit={Environment.Is64BitProcess}");
+                DebugStr($"[BOOT] BaseDirectory='{AppContext.BaseDirectory}'");
+                DebugStr($"[BOOT] CurrentDirectory='{Environment.CurrentDirectory}'");
+                DebugStr($"[BOOT] Args count={(args == null ? -1 : args.Length)}");
 
-				string assetOrBundle = args[0].Replace('\\', '/');
-				string inputFile = args[1].Replace('\\', '/');
-				string pathId = args.Length >= 3 ? args[2].Trim() : string.Empty;
+                if (args == null)
+                {
+                    DisplayStr("Null args!");
+                    return;
+                }
 
-				if (!File.Exists(assetOrBundle))
-				{
-					DisplayStr("Input bundle/assets file not found: " + assetOrBundle);
-					return;
-				}
+                if (args.Length < 2)
+                {
+                    DisplayStr("Usage: UAFGJ.exe <bundle/assets> <input.txt/png> [pathId]");
+                    return;
+                }
 
-				if (!File.Exists(inputFile))
-				{
-					DisplayStr("Input replacement file not found: " + inputFile);
-					return;
-				}
+                string assetOrBundle = args[0].Replace('\\', '/');
+                string inputFile = args[1].Replace('\\', '/');
+                string pathId = args.Length >= 3 ? args[2].Trim() : string.Empty;
+                string fileKind = args.Length >= 4 ? args[3].Trim() : string.Empty;
 
-				DisplayStr("File exists: " + assetOrBundle);
-				DisplayStr("Replacement exists: " + inputFile);
-				if (!string.IsNullOrWhiteSpace(pathId))
-					DisplayStr("Requested path ID: " + pathId);
+                DebugStr($"[BOOT] Input path='{assetOrBundle}'");
+                DebugStr($"[BOOT] Replacement path='{inputFile}'");
+                DebugStr($"[BOOT] PathID='{pathId}'");
+                DebugStr($"[BOOT] FileKind='{fileKind}'");
 
-				DoStuff(assetOrBundle, inputFile, pathId);
-			}
-			catch (Exception ex)
-			{
-				DisplayStr("[FATAL] " + ex.GetType().Name + ": " + ex.Message);
-				DebugStr(ex.ToString());
-				Environment.ExitCode = 1;
-			}
-		}
+                if (!File.Exists(assetOrBundle))
+                {
+                    DisplayStr("Input bundle/assets file not found: " + assetOrBundle);
+                    return;
+                }
 
-		static private void DoStuff(string assetOrBundle, string inputFile, string specificPathId)
-		{
-			DebugStr("Opening file: " + assetOrBundle);
-			DetectedFileType fileType = FileTypeDetector.DetectFileType(assetOrBundle);
-			DebugStr("Detected file type: " + fileType);
+                if (!File.Exists(inputFile))
+                {
+                    DisplayStr("Input replacement file not found: " + inputFile);
+                    return;
+                }
 
-			switch (fileType)
-			{
-				case DetectedFileType.BundleFile:
-					HandleBundle(assetOrBundle, inputFile, specificPathId);
-					break;
+                LogFileState("[BOOT] INPUT", assetOrBundle);
+                LogFileState("[BOOT] REPLACEMENT", inputFile);
 
-				case DetectedFileType.AssetsFile:
-					HandleAsset(assetOrBundle, inputFile, specificPathId);
-					break;
+                DisplayStr("File exists: " + assetOrBundle);
+                DisplayStr("Replacement exists: " + inputFile);
+                if (!string.IsNullOrWhiteSpace(pathId))
+                {
+                    DisplayStr("Requested path ID: " + pathId);
+                }
+                if (!string.IsNullOrWhiteSpace(fileKind))
+                {
+                    DisplayStr("File kind: " + fileKind);
+                }
 
-				default:
-					DisplayStr("Invalid file type for " + assetOrBundle + ": " + fileType);
-					break;
-			}
-		}
-	}
+                DebugStr("[BOOT] Entering DoStuff().");
+                DoStuff(assetOrBundle, inputFile, pathId, fileKind);
+                DebugStr($"[BOOT] DoStuff() returned. ExitCode={Environment.ExitCode}");
+            }
+            catch (Exception ex)
+            {
+                DisplayStr("[FATAL] " + ex.GetType().Name + ": " + ex.Message);
+                DebugStr(ex.ToString());
+                Environment.ExitCode = 1;
+            }
+            finally
+            {
+                DebugStr($"[BOOT] UAFGJ exiting. ExitCode={Environment.ExitCode}");
+                DebugStr("[BOOT] ==================================================");
+            }
+        }
+
+        private static void CurrentDomain_UnhandledException(object sender, UnhandledExceptionEventArgs e)
+        {
+            try
+            {
+                if (e.ExceptionObject is Exception ex)
+                {
+                    DisplayStr("[UNHANDLED] Unhandled exception detected.");
+                    DebugStr($"[UNHANDLED] Type={ex.GetType().FullName}");
+                    DebugStr($"[UNHANDLED] Message={ex.Message}");
+                    DebugStr(ex.ToString());
+                }
+                else
+                {
+                    DisplayStr("[UNHANDLED] Unhandled non-Exception object detected: " + (e.ExceptionObject?.GetType().FullName ?? "<null>"));
+                    DebugStr($"[UNHANDLED] Object={e.ExceptionObject}");
+                }
+
+                DebugStr($"[UNHANDLED] IsTerminating={e.IsTerminating}");
+            }
+            catch
+            {
+            }
+        }
+
+        private static void CurrentDomain_ProcessExit(object sender, EventArgs e)
+        {
+            try
+            {
+                DebugStr($"[BOOT] ProcessExit event. ExitCode={Environment.ExitCode}");
+            }
+            catch
+            {
+            }
+        }
+
+        static private void DoStuff(string assetOrBundle, string inputFile, string specificPathId, string fileKind)
+        {
+            DebugStr("[PHASE] DoStuff: starting file detection.");
+            DebugStr("Opening file: " + assetOrBundle);
+
+            DetectedFileType fileType;
+            try
+            {
+                fileType = FileTypeDetector.DetectFileType(assetOrBundle);
+            }
+            catch (Exception ex)
+            {
+                DisplayStr("[FATAL] File type detection failed: " + ex.GetType().Name + ": " + ex.Message);
+                DebugStr(ex.ToString());
+                Environment.ExitCode = 1;
+                return;
+            }
+
+            DebugStr("Detected file type: " + fileType);
+
+            switch (fileType)
+            {
+                case DetectedFileType.BundleFile:
+                    DebugStr("[PHASE] Dispatching to HandleBundle().");
+                    HandleBundle(assetOrBundle, inputFile, specificPathId, fileKind);
+                    break;
+
+                case DetectedFileType.AssetsFile:
+                    DebugStr("[PHASE] Dispatching to HandleAsset().");
+                    HandleAsset(assetOrBundle, inputFile, specificPathId, fileKind);
+                    break;
+
+                default:
+                    DisplayStr("Invalid file type for " + assetOrBundle + ": " + fileType);
+                    Environment.ExitCode = 1;
+                    break;
+            }
+        }
+    }
 }

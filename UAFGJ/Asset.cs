@@ -6,134 +6,197 @@ using System.Collections.Generic;
 
 namespace UAFGJ
 {
-	partial class Program
-	{
-		static private void HandleAsset(string asset, string input_file, string specific_pathid)
-		{
-			AssetsManager am = new AssetsManager();
-			AssetsFileInstance assetInst = null;
+    partial class Program
+    {
+        static private void HandleAsset(string asset, string input_file, string specific_pathid, string fileKind)
+        {
+            LogPhase($"Asset-file start: asset='{asset}', input='{input_file}', pathId='{specific_pathid}', kind='{fileKind}'.");
+            AssetsManager am = new AssetsManager();
+            AssetsFileInstance assetInst = null;
 
-			try
-			{
-				assetInst = am.LoadAssetsFile(asset, true);
-				if (assetInst == null)
-				{
-					DisplayStr("Could not load assets file: " + asset);
-					return;
-				}
+            ConfigureMonoBehaviourTemplateGenerator(
+                am,
+                asset);
 
-				if (!File.Exists("classdata.tpk"))
-				{
-					DisplayStr("classdata.tpk not found!");
-					return;
-				}
+            string classDataPath =
+                ResolveClassDataTpkPath();
 
-				ClassPackageFile meta_class = am.LoadClassPackage("classdata.tpk");
-				ClassDatabaseFile meta_db = null;
-				if (!assetInst.file.Metadata.TypeTreeEnabled)
-					meta_db = am.LoadClassDatabaseFromPackage(assetInst.file.Metadata.UnityVersion);
+            if (string.IsNullOrWhiteSpace(classDataPath))
+            {
+                DisplayStr(
+                    "classdata.tpk not found in current or executable directory!");
+                return;
+            }
 
-				DebugStr("Loaded classdata.tpk");
+            string tempAssetPath =
+                asset + ".uafgj_stage_" +
+                Guid.NewGuid().ToString("N") + ".tmp";
 
-				AssetsTools.NET.AssetTypeValueField atvf = null;
-				AssetFileInfo afie = null;
-				byte[] rawReplacementData = null;
-				byte[] originalSerializedData = null;
+            CleanupStaleAssetStages(asset);
+            DeleteFileIfExists(asset + "_temp");
+            DeleteFileIfExists(asset + ".uafgj_tmp");
 
-				if (!string.Equals(Path.GetExtension(input_file), ".png", StringComparison.OrdinalIgnoreCase))
-				{
-					if (!FindTXTFile(
-						input_file,
-						ref assetInst,
-						ref afie,
-						ref atvf,
-						ref am,
-						asset,
-						assetInst.name,
-						specific_pathid,
-						out rawReplacementData,
-						out originalSerializedData))
-					{
-						DisplayStr("Failed to replace TXT!");
-						return;
-					}
-				}
-				else
-				{
-					if (!FindPNGFile(
-						input_file,
-						ref afie,
-						ref assetInst,
-						ref atvf,
-						ref am,
-						asset,
-						assetInst.name,
-						specific_pathid))
-					{
-						return;
-					}
+            try
+            {
+                DebugStr("[ASSET] Loading AssetsFile.");
+                assetInst = am.LoadAssetsFile(asset, true);
+                if (assetInst == null)
+                {
+                    DisplayStr("Could not load assets file: " + asset);
+                    return;
+                }
 
-					int format = atvf["m_TextureFormat"].AsInt;
+                if (!File.Exists(classDataPath))
+                {
+                    DisplayStr("classdata.tpk not found!");
+                    return;
+                }
 
-					if (!ImportTexturesCustom(ref atvf, input_file, format))
-					{
-						DisplayStr("Could not import PNG!");
-						return;
-					}
+                ClassPackageFile meta_class = am.LoadClassPackage(classDataPath);
+                ClassDatabaseFile meta_db = null;
+                if (!assetInst.file.Metadata.TypeTreeEnabled)
+                    meta_db = am.LoadClassDatabaseFromPackage(assetInst.file.Metadata.UnityVersion);
 
-					rawReplacementData = atvf.WriteToByteArray();
-				}
+                DebugStr("Loaded classdata.tpk");
 
-				if (afie == null || rawReplacementData == null || rawReplacementData.Length == 0)
-				{
-					DisplayStr("Invalid replacement state.");
-					return;
-				}
+                AssetsTools.NET.AssetTypeValueField atvf = null;
+                AssetFileInfo afie = null;
+                byte[] rawReplacementData = null;
+                byte[] originalSerializedData = null;
 
-				ushort monoId = assetInst.file.GetScriptIndex(afie);
-				DebugStr($"[ASSET] Resolved MonoScript index: {monoId} (0x{monoId:X4}) for PID={afie.PathId}");
+                DebugStr("[ASSET] Determining replacement type from extension.");
+                if (!string.Equals(Path.GetExtension(input_file), ".png", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Despite the name, "Find" also replaces stuff
+                    if (!FindTXTFile(
+                        input_file,
+                        ref assetInst,
+                        ref afie,
+                        ref atvf,
+                        ref am,
+                        asset,
+                        assetInst.name,
+                        specific_pathid,
+                        fileKind,
+                        out rawReplacementData,
+                        out originalSerializedData))
+                    {
+                        DisplayStr("Failed to replace TXT!");
+                        return;
+                    }
+                }
+                else
+                {
+                    // Despite the name, "Find" also replaces stuff
+                    if (!FindPNGFile(
+                        input_file,
+                        ref afie,
+                        ref assetInst,
+                        ref atvf,
+                        ref am,
+                        asset,
+                        assetInst.name,
+                        specific_pathid,
+                        fileKind))
+                    {
+                        return;
+                    }
 
-				var repl = new AssetsReplacerFromMemory(
-					afie.PathId,
-					(int)afie.TypeId,
-					monoId,
-					rawReplacementData);
+                    int format = atvf["m_TextureFormat"].AsInt;
 
-				string fakeName = asset + "_temp";
+                    if (!ImportTexturesCustom(ref atvf, input_file, format, fileKind))
+                    {
+                        DisplayStr("Could not import PNG!");
+                        return;
+                    }
 
-				DebugStr("[ASSET] Writing replacement to temporary file: " + fakeName);
+                    rawReplacementData = atvf.WriteToByteArray();
+                }
 
-				using (var stream = new FileStream(
-					fakeName,
-					FileMode.Create,
-					FileAccess.Write,
-					FileShare.None))
-				using (var writer = new AssetsFileWriter(stream))
-				{
-					assetInst.file.Write(
-						writer,
-						0,
-						new List<AssetsReplacer> { repl });
+                DebugStr("[ASSET] Import phase returned; validating replacement state before write.");
+                if (afie == null || rawReplacementData == null || rawReplacementData.Length == 0)
+                {
+                    DisplayStr("Invalid replacement state.");
+                    return;
+                }
 
-				}
+                ushort monoId = assetInst.file.GetScriptIndex(afie);
+                DebugStr($"[ASSET] Resolved MonoScript index: {monoId} (0x{monoId:X4}) for PID={afie.PathId}");
 
-				// The original file is still held by AssetsTools until unload.
-				am.UnloadAllAssetsFiles(true);
+                var repl = new AssetsReplacerFromMemory(
+                    afie.PathId,
+                    (int)afie.TypeId,
+                    monoId,
+                    rawReplacementData);
 
-				DebugStr("[ASSET] Handles released; replacing original file.");
-				File.Move(fakeName, asset, true);
+                string fakeName = tempAssetPath;
 
-				DisplayStr("Successfully replaced asset!");
-			}
-			catch (Exception ex)
-			{
-				DisplayStr("[FATAL] Assets file handling failed: " + ex.GetType().Name + ": " + ex.Message);
-				DebugStr(ex.ToString());
-			}
-			finally
-			{
-				try { am.UnloadAllAssetsFiles(true); } catch { }
-			}
-		}
-	}
+                DebugStr($"[ASSET] Writing replacement to staging file '{fakeName}'.");
+
+                using (var stream = new FileStream(
+                    fakeName,
+                    FileMode.Create,
+                    FileAccess.Write,
+                    FileShare.None))
+                using (var writer = new AssetsFileWriter(stream))
+                {
+                    assetInst.file.Write(
+                        writer,
+                        0,
+                        new List<AssetsReplacer> { repl });
+
+                }
+
+                // The original file is still held by AssetsTools until unload.
+                DebugStr("[ASSET] Staging write completed; releasing AssetsManager handles.");
+                am.UnloadAllAssetsFiles(true);
+
+                DebugStr("[ASSET] Handles released; replacing original file.");
+                ReplaceFileWithRetry(fakeName, asset);
+
+                DisplayStr("Successfully replaced asset!");
+            }
+            catch (Exception ex)
+            {
+                Environment.ExitCode = 1;
+                DisplayStr("[FATAL] Assets file handling failed: " + ex.GetType().Name + ": " + ex.Message);
+                DebugStr(ex.ToString());
+            }
+            finally
+            {
+                try { am.UnloadAllAssetsFiles(true); } catch { }
+                DeleteFileIfExists(tempAssetPath);
+            }
+        }
+
+        private static void CleanupStaleAssetStages(string assetPath)
+        {
+            try
+            {
+                string directory = Path.GetDirectoryName(assetPath);
+                string fileName = Path.GetFileName(assetPath);
+
+                if (string.IsNullOrEmpty(directory) ||
+                    string.IsNullOrEmpty(fileName) ||
+                    !Directory.Exists(directory))
+                {
+                    return;
+                }
+
+                string pattern =
+                    fileName + ".uafgj_stage_*.tmp";
+
+                foreach (string path in Directory.GetFiles(directory, pattern))
+                {
+                    DeleteFileIfExists(path);
+                }
+            }
+            catch (Exception ex)
+            {
+                DebugStr(
+                    "[CLEANUP] Could not scan for stale asset staging files: " +
+                    ex.GetType().Name + ": " + ex.Message);
+            }
+        }
+    }
 }

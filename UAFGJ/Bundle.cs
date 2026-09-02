@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
+using System.Threading;
 
 namespace UAFGJ
 {
@@ -27,54 +28,162 @@ namespace UAFGJ
             public long SerializedLength;
             public List<AssetFingerprint> Assets = new List<AssetFingerprint>();
         }
-
-        static private void HandleBundle(string ab, string input_file, string specific_pathid)
+        static private void HandleBundle(
+            string ab,
+            string input_file,
+            string specific_pathid,
+            string fileKind)
         {
-            string originalBundleSha = Sha256File(ab);
-            long originalBundleLength = new FileInfo(ab).Length;
-            DebugStr($"[CHECK] INPUT bundle length={originalBundleLength} SHA256={originalBundleSha}");
-            DebugStr($"[CHECK] INPUT replacement SHA256={Sha256File(input_file)} length={new FileInfo(input_file).Length}");
-            DebugStr($"[CHECK] classdata.tpk SHA256={(File.Exists("classdata.tpk") ? Sha256File("classdata.tpk") : "MISSING")}");
+            LogPhase($"Bundle start: bundle='{ab}', input='{input_file}', pathId='{specific_pathid}', kind='{fileKind}'.");
+            string originalBundleSha =
+                Sha256File(ab);
 
-            AssetsManager am = new AssetsManager();
+            long originalBundleLength =
+                new FileInfo(ab).Length;
+
+            string classDataPath =
+                ResolveClassDataTpkPath();
+
+            DebugStr(
+                $"[CHECK] INPUT bundle length={originalBundleLength} " +
+                $"SHA256={originalBundleSha}");
+
+            DebugStr(
+                $"[CHECK] INPUT replacement SHA256={Sha256File(input_file)} " +
+                $"length={new FileInfo(input_file).Length}");
+
+            DebugStr(
+                $"[CHECK] classdata.tpk SHA256=" +
+                $"{(File.Exists(classDataPath) ? Sha256File(classDataPath) : "MISSING")}");
+
+            // Unique staging files: no stale _temp/.new reuse.
+            string tempBundlePath =
+                ab + ".uafgj_stage1_" + Guid.NewGuid().ToString("N") + ".tmp";
+
+            string finalTempPath =
+                ab + ".uafgj_stage2_" + Guid.NewGuid().ToString("N") + ".tmp";
+
+            // Clean files created by older/interrupted UAFGJ runs.
+            DebugStr($"[TEMP] stage1='{tempBundlePath}'");
+            DebugStr($"[TEMP] stage2='{finalTempPath}'");
+            CleanupStaleBundleStages(ab);
+            DeleteFileIfExists(ab + "_temp");
+            DeleteFileIfExists(ab + ".new");
+            DeleteFileIfExists(ab + ".uafgj_tmp");
+            DebugStr("[TEMP] Stale temporary cleanup completed.");
+
+            AssetsManager am =
+                new AssetsManager();
+
+            ConfigureMonoBehaviourTemplateGenerator(
+                am,
+                ab);
+
+            if (string.IsNullOrWhiteSpace(classDataPath))
+            {
+                DisplayStr(
+                    "classdata.tpk not found in current or executable directory!");
+                return;
+            }
+
             try
             {
-                BundleFileInstance bundleInst = GetBundleInst(am, ab);
-                if (bundleInst == null) return;
+                LogPhase("Loading bundle into AssetsManager.");
+                BundleFileInstance bundleInst =
+                    GetBundleInst(
+                        am,
+                        ab);
 
-                string assetfile_name = GetRightAssetFileNameFromBundle(bundleInst, ab);
-                if (string.IsNullOrEmpty(assetfile_name)) return;
+                if (bundleInst == null)
+                    return;
 
-                AssetsFileInstance assetInst = GetAssetInst(am, bundleInst, assetfile_name, ab);
-                if (assetInst == null) return;
+                string assetfile_name =
+                    GetRightAssetFileNameFromBundle(
+                        bundleInst,
+                        ab);
 
-                if (!File.Exists("classdata.tpk"))
+                if (string.IsNullOrEmpty(assetfile_name))
+                    return;
+
+                LogPhase($"Loading contained assets file '{assetfile_name}'.");
+                AssetsFileInstance assetInst =
+                    GetAssetInst(
+                        am,
+                        bundleInst,
+                        assetfile_name,
+                        ab);
+
+                if (assetInst == null)
+                    return;
+
+                if (!File.Exists(classDataPath))
                 {
-                    DisplayStr("classdata.tpk not found!");
+                    DisplayStr(
+                        "classdata.tpk not found!");
+
                     return;
                 }
 
-                am.LoadClassPackage("classdata.tpk");
+                am.LoadClassPackage(
+                    "classdata.tpk");
+
                 if (!assetInst.file.Metadata.TypeTreeEnabled)
-                    am.LoadClassDatabaseFromPackage(assetInst.file.Metadata.UnityVersion);
-                DebugStr("Loaded classdata.tpk");
+                {
+                    am.LoadClassDatabaseFromPackage(
+                        assetInst.file.Metadata.UnityVersion);
+                }
 
-                AssetBundleCompressionType originalCompression = bundleInst.file.GetCompressionType(bundleInst.file.BlockAndDirInfo.BlockInfos);
-                var originalDirectoryNames = bundleInst.file.BlockAndDirInfo.DirectoryInfos.Select(d => d.Name).ToList();
-                DebugStr($"[CHECK] INPUT bundle compression={originalCompression}; directory entries={originalDirectoryNames.Count}");
+                DebugStr(
+                    "Loaded classdata.tpk");
 
-                AssetsFileSnapshot beforeSnapshot = CaptureAssetsFileSnapshot(am, assetInst, assetfile_name);
-                DebugStr($"[CHECK] BEFORE assets '{assetfile_name}' SHA256={beforeSnapshot.Sha256} serializedLength={beforeSnapshot.SerializedLength} assets={beforeSnapshot.Assets.Count}");
+                AssetBundleCompressionType originalCompression =
+                    bundleInst.file.GetCompressionType(
+                        bundleInst.file.BlockAndDirInfo.BlockInfos);
 
-                AssetsTools.NET.AssetTypeValueField atvf = null;
-                AssetFileInfo afie = null;
-                byte[] rawReplacementData = null;
-                byte[] originalTargetData = null;
+                var originalDirectoryNames =
+                    bundleInst.file.BlockAndDirInfo.DirectoryInfos
+                        .Select(d => d.Name)
+                        .ToList();
 
-                bool isTextReplacement = !string.Equals(
-                    Path.GetExtension(input_file),
-                    ".png",
-                    StringComparison.OrdinalIgnoreCase);
+                DebugStr(
+                    $"[CHECK] INPUT bundle compression={originalCompression}; " +
+                    $"directory entries={originalDirectoryNames.Count}");
+
+                LogPhase("Capturing pre-import assets snapshot.");
+                AssetsFileSnapshot beforeSnapshot =
+                    CaptureAssetsFileSnapshot(
+                        am,
+                        assetInst,
+                        assetfile_name);
+
+                DebugStr(
+                    $"[CHECK] BEFORE assets '{assetfile_name}' " +
+                    $"SHA256={beforeSnapshot.Sha256} " +
+                    $"serializedLength={beforeSnapshot.SerializedLength} " +
+                    $"assets={beforeSnapshot.Assets.Count}");
+
+                AssetsTools.NET.AssetTypeValueField atvf =
+                    null;
+
+                AssetFileInfo afie =
+                    null;
+
+                byte[] rawReplacementData =
+                    null;
+
+                byte[] originalTargetData =
+                    null;
+
+                bool isTextReplacement =
+                    !string.Equals(
+                        Path.GetExtension(input_file),
+                        ".png",
+                        StringComparison.OrdinalIgnoreCase);
+
+                // ============================================================
+                // IMPORT
+                // ============================================================
+                LogPhase($"Beginning import for kind='{fileKind}', input='{input_file}'.");
 
                 if (isTextReplacement)
                 {
@@ -87,10 +196,13 @@ namespace UAFGJ
                         ab,
                         assetfile_name,
                         specific_pathid,
+                        fileKind,
                         out rawReplacementData,
                         out originalTargetData))
                     {
-                        DisplayStr("Failed to replace TXT!");
+                        DisplayStr(
+                            "Failed to replace TXT!");
+
                         return;
                     }
                 }
@@ -104,53 +216,199 @@ namespace UAFGJ
                         ref am,
                         ab,
                         assetfile_name,
-                        specific_pathid))
+                        specific_pathid,
+                        fileKind))
+                    {
                         return;
+                    }
 
-                    int format = atvf["m_TextureFormat"].AsInt;
-                    if (!ImportTexturesCustom(ref atvf, input_file, format))
+                    if (atvf == null ||
+                        atvf.IsDummy)
+                    {
+                        DisplayStr(
+                            "[PNG] Replacement target BaseField is null/dummy.");
+
                         return;
+                    }
 
-                    rawReplacementData = atvf.WriteToByteArray();
-                    originalTargetData = null;
+                    int format =
+                        atvf["m_TextureFormat"].AsInt;
+
+                    if (!ImportTexturesCustom(
+                        ref atvf,
+                        input_file,
+                        format,
+                        fileKind))
+                    {
+                        return;
+                    }
+
+                    rawReplacementData =
+                        atvf.WriteToByteArray();
+
+                    originalTargetData =
+                        null;
                 }
 
-                if (afie == null || atvf == null || rawReplacementData == null || rawReplacementData.Length == 0)
+                DebugStr("[CHECK] Import function returned; validating replacement state.");
+
+                // ============================================================
+                // VALIDATE IMPORT RESULT
+                //
+                // IMPORTANT:
+                //
+                // MONOBEHAVIOUR_TEXT and MONOBEHAVIOUR_TEXT_CHECKED use
+                // rawReplacementData and deliberately return atvf == null.
+                //
+                // Therefore atvf must NOT be required here for those two kinds.
+                // ============================================================
+
+                bool rawMonoTextKind =
+                    string.Equals(
+                        fileKind,
+                        "MONOBEHAVIOUR_TEXT",
+                        StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(
+                        fileKind,
+                        "MONOBEHAVIOUR_TEXT_CHECKED",
+                        StringComparison.OrdinalIgnoreCase);
+
+                if (afie == null)
                 {
-                    DisplayStr("[CHECK] Replacement target or data is missing; refusing to write.");
+                    DisplayStr(
+                        "[CHECK] Replacement target is missing; refusing to write.");
+
                     return;
                 }
 
-                int expectedTargetTypeId = afie.TypeId;
-                DebugStr($"[CHECK] Replacement mode={(isTextReplacement ? "TXT" : "PNG/GenericAsset")}, PID={afie.PathId}, TypeID={expectedTargetTypeId}");
+                if (rawReplacementData == null ||
+                    rawReplacementData.Length == 0)
+                {
+                    DisplayStr(
+                        "[CHECK] Replacement data is missing; refusing to write.");
 
-                AssetFingerprint targetBefore = beforeSnapshot.Assets.FirstOrDefault(a => a.PathId == afie.PathId);
+                    return;
+                }
+
+                if (!rawMonoTextKind &&
+                    atvf == null)
+                {
+                    DisplayStr(
+                        "[CHECK] Replacement BaseField is missing for " +
+                        $"fileKind='{fileKind}'; refusing to write.");
+
+                    return;
+                }
+
+                DebugStr(
+                    $"[CHECK] Replacement target accepted: " +
+                    $"PID={afie.PathId}, " +
+                    $"TypeID={afie.TypeId}, " +
+                    $"kind='{fileKind}', " +
+                    $"raw={rawMonoTextKind}");
+
+                int expectedTargetTypeId =
+                    afie.TypeId;
+
+                DebugStr(
+                    $"[CHECK] Replacement mode=" +
+                    $"{(isTextReplacement ? "TXT" : "PNG/GenericAsset")}, " +
+                    $"PID={afie.PathId}, " +
+                    $"TypeID={expectedTargetTypeId}");
+
+                // ============================================================
+                // VERIFY TARGET IN BEFORE SNAPSHOT
+                // ============================================================
+
+                AssetFingerprint targetBefore =
+                    beforeSnapshot.Assets.FirstOrDefault(
+                        a => a.PathId == afie.PathId);
+
                 if (targetBefore == null)
-                    throw new InvalidDataException("Target PathID disappeared from pre-write snapshot.");
+                {
+                    throw new InvalidDataException(
+                        "Target PathID disappeared from pre-write snapshot.");
+                }
 
-                if (targetBefore.TypeId != expectedTargetTypeId)
-                    throw new InvalidDataException($"Replacement target TypeID changed before save: {targetBefore.TypeId}->{expectedTargetTypeId}");
+                if (targetBefore.TypeId !=
+                    expectedTargetTypeId)
+                {
+                    throw new InvalidDataException(
+                        $"Replacement target TypeID changed before save: " +
+                        $"{targetBefore.TypeId}->{expectedTargetTypeId}");
+                }
 
-                DebugStr($"[CHECK] TARGET BEFORE PID={targetBefore.PathId} TypeID={targetBefore.TypeId} ByteSize={targetBefore.ByteSize} ScriptIndex={targetBefore.MonoScriptIndex} Name='{targetBefore.Name}' SHA256={targetBefore.SerializedSha256}");
-                DebugStr($"[CHECK] TARGET AFTER  PID={afie.PathId} TypeID={afie.TypeId} bytes={rawReplacementData.Length} SHA256={Sha256Hex(rawReplacementData)}");
+                DebugStr(
+                    $"[CHECK] TARGET BEFORE " +
+                    $"PID={targetBefore.PathId} " +
+                    $"TypeID={targetBefore.TypeId} " +
+                    $"ByteSize={targetBefore.ByteSize} " +
+                    $"ScriptIndex={targetBefore.MonoScriptIndex} " +
+                    $"Name='{targetBefore.Name}' " +
+                    $"SHA256={targetBefore.SerializedSha256}");
 
-                SaveAssetBundle(
-                    atvf,
-                    afie,
-                    assetInst,
-                    bundleInst,
-                    ab,
-                    assetfile_name,
-                    Path.GetFileNameWithoutExtension(input_file));
+                DebugStr(
+                    $"[CHECK] TARGET AFTER " +
+                    $"PID={afie.PathId} " +
+                    $"TypeID={afie.TypeId} " +
+                    $"bytes={rawReplacementData.Length} " +
+                    $"SHA256={Sha256Hex(rawReplacementData)}");
 
-                string tempBundle = ab + "_temp";
-                string rawTempSha = Sha256File(tempBundle);
-                DebugStr($"[CHECK] RAW temp bundle length={new FileInfo(tempBundle).Length} SHA256={rawTempSha}");
+                LogPhase("Replacement data accepted; beginning save pipeline.");
+
+                // ============================================================
+                // SAVE
+                // ============================================================
+
+                // Both TEXT and TEXT_CHECKED use the raw serialized asset path.
+                if (rawMonoTextKind)
+                {
+                    DebugStr(
+                        $"[SAVE] Using RAW MonoBehaviour saver " +
+                        $"for fileKind='{fileKind}'.");
+
+                    SaveAssetBundleRaw(
+                        rawReplacementData,
+                        afie,
+                        assetInst,
+                        bundleInst,
+                        assetfile_name,
+                        tempBundlePath);
+                }
+                else
+                {
+                    SaveAssetBundle(
+                        atvf,
+                        afie,
+                        assetInst,
+                        bundleInst,
+                        assetfile_name,
+                        tempBundlePath,
+                        Path.GetFileNameWithoutExtension(
+                            input_file));
+                }
+
+                // ============================================================
+                // UNLOAD BEFORE FINAL PACK
+                // ============================================================
+                LogPhase("Releasing source bundle handles before final pack.");
 
                 if (!am.UnloadAllAssetsFiles(true))
-                    DisplayStr("Could not unload all asset files!");
+                {
+                    DisplayStr(
+                        "Could not unload all asset files!");
+                }
+
                 if (!am.UnloadAllBundleFiles())
-                    DisplayStr("Could not unload all bundle files!");
+                {
+                    DisplayStr(
+                        "Could not unload all bundle files!");
+                }
+
+                // ============================================================
+                // FINAL PACK + VALIDATION
+                // ============================================================
+                LogPhase("Beginning final pack and validation.");
 
                 PackBundlePreservingFormat(
                     ab,
@@ -158,6 +416,7 @@ namespace UAFGJ
                     afie.PathId,
                     specific_pathid,
                     input_file,
+                    fileKind,
                     rawReplacementData,
                     beforeSnapshot,
                     originalBundleSha,
@@ -165,24 +424,43 @@ namespace UAFGJ
                     originalCompression,
                     originalDirectoryNames,
                     expectedTargetTypeId,
-                    isTextReplacement);
+                    isTextReplacement,
+                    tempBundlePath,
+                    finalTempPath);
 
-                DisplayStr("Done!");
+                DisplayStr(
+                    "Done!");
             }
             catch (Exception ex)
             {
-                DisplayStr("[FATAL] Bundle handling failed: " + ex.GetType().Name + ": " + ex.Message);
-                DebugStr(ex.ToString());
+                Environment.ExitCode = 1;
+                DisplayStr(
+                    "[FATAL] Bundle handling failed: " +
+                    ex.GetType().Name +
+                    ": " +
+                    ex.Message);
+
+                DebugStr(
+                    ex.ToString());
+            }
+            finally
+            {
+                try { am.UnloadAllAssetsFiles(true); } catch { }
+                try { am.UnloadAllBundleFiles(); } catch { }
+
+                DeleteFileIfExists(tempBundlePath);
+                DeleteFileIfExists(finalTempPath);
             }
         }
+
 
         private static void SaveAssetBundle(
             AssetsTools.NET.AssetTypeValueField modifiedBaseField,
             AssetFileInfo afie,
             AssetsFileInstance assetInst,
             BundleFileInstance bundleInst,
-            string ab,
             string assetfile_name,
+            string tempBundle,
             string input_noext)
         {
             if (modifiedBaseField == null)
@@ -190,6 +468,7 @@ namespace UAFGJ
             if (afie == null)
                 throw new InvalidOperationException("Asset info is null.");
 
+            DebugStr($"[SAVE] Preparing generic asset replacement PID={afie.PathId}, TypeID={afie.TypeId}.");
             ushort monoId = assetInst.file.GetScriptIndex(afie);
             byte[] bytes = modifiedBaseField.WriteToByteArray();
             DebugStr($"[SAVE] Existing-asset replacer: PID={afie.PathId}, TypeID={afie.TypeId}, MonoScriptIndex={monoId} (0x{monoId:X4}), bytes={bytes.Length}, SHA256={Sha256Hex(bytes)}");
@@ -207,8 +486,8 @@ namespace UAFGJ
 
             DebugStr($"[SAVE] Inner assets file size={newAssetData.Length} SHA256={Sha256Hex(newAssetData)}");
 
-            string tempBundle = ab + "_temp";
-            using (var fileStream = new FileStream(tempBundle, FileMode.Create, FileAccess.Write, FileShare.None))
+            DebugStr($"[SAVE] Creating stage1 bundle '{tempBundle}'.");
+            using (var fileStream = new FileStream(tempBundle, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             using (var bunWriter = new AssetsFileWriter(fileStream))
             {
                 var bunRepl = new BundleReplacerFromMemory(assetfile_name, null, true, newAssetData, -1);
@@ -218,57 +497,197 @@ namespace UAFGJ
             DebugStr($"[SAVE] Temporary bundle written: {tempBundle}");
         }
 
-        private static void PackBundlePreservingFormat(
-            string realName,
-            string assetfileName,
-            long targetPathId,
-            string specificPathId,
-            string dumpPath,
-            byte[] expectedTargetData,
-            AssetsFileSnapshot beforeSnapshot,
-            string originalBundleSha,
-            long originalBundleLength,
-            AssetBundleCompressionType originalCompression,
-            List<string> originalDirectoryNames,
-            int expectedTargetTypeId,
-            bool isTextReplacement)
+        private static void SaveAssetBundleRaw(
+    byte[] replacementData,
+    AssetFileInfo afie,
+    AssetsFileInstance assetInst,
+    BundleFileInstance bundleInst,
+    string assetfile_name,
+    string tempBundle)
         {
-            string fakeName = realName + "_temp";
-            if (!File.Exists(fakeName))
-                throw new FileNotFoundException("Temporary bundle missing.", fakeName);
+            if (replacementData == null ||
+                replacementData.Length == 0)
+            {
+                throw new InvalidDataException(
+                    "Raw replacement data is empty.");
+            }
 
-            DebugStr("[CHECK] ===== PRE-PACK CONTAINER VALIDATION =====");
+            if (afie == null)
+                throw new InvalidDataException(
+                    "AssetFileInfo is null.");
+
+            if (assetInst == null)
+                throw new InvalidDataException(
+                    "AssetsFileInstance is null.");
+
+            ushort monoId =
+                assetInst.file.GetScriptIndex(
+                    afie);
+
+            DebugStr(
+                $"[SAVE] RAW existing-asset replacer: " +
+                $"PID={afie.PathId}, " +
+                $"TypeID={afie.TypeId}, " +
+                $"MonoScriptIndex={monoId} " +
+                $"(0x{monoId:X4}), " +
+                $"bytes={replacementData.Length}, " +
+                $"SHA256={Sha256Hex(replacementData)}");
+
+            var repl =
+                new AssetsReplacerFromMemory(
+                    afie.PathId,
+                    (int)afie.TypeId,
+                    monoId,
+                    replacementData);
+
+            byte[] newAssetData;
+
+            using (var stream =
+                new MemoryStream())
+            using (var writer =
+                new AssetsFileWriter(stream))
+            {
+                assetInst.file.Write(
+                    writer,
+                    0,
+                    new List<AssetsReplacer>
+                    {
+                repl
+                    });
+
+                newAssetData =
+                    stream.ToArray();
+            }
+
+            DebugStr(
+                $"[SAVE] RAW inner assets file size=" +
+                $"{newAssetData.Length} " +
+                $"SHA256={Sha256Hex(newAssetData)}");
+
+            using (var fileStream =
+                new FileStream(
+                    tempBundle,
+                    FileMode.CreateNew,
+                    FileAccess.Write,
+                    FileShare.None))
+            using (var bunWriter =
+                new AssetsFileWriter(
+                    fileStream))
+            {
+                var bunRepl =
+                    new BundleReplacerFromMemory(
+                        assetfile_name,
+                        null,
+                        true,
+                        newAssetData,
+                        -1);
+
+                bundleInst.file.Write(
+                    bunWriter,
+                    new List<BundleReplacer>
+                    {
+                bunRepl
+                    });
+            }
+
+            DebugStr(
+                $"[SAVE] Temporary bundle written: " +
+                $"{tempBundle}");
+        }
+
+        private static void PackBundlePreservingFormat(
+    string realName,
+    string assetfileName,
+    long targetPathId,
+    string specificPathId,
+    string dumpPath,
+    string fileKind,
+    byte[] expectedTargetData,
+    AssetsFileSnapshot beforeSnapshot,
+    string originalBundleSha,
+    long originalBundleLength,
+    AssetBundleCompressionType originalCompression,
+    List<string> originalDirectoryNames,
+    int expectedTargetTypeId,
+    bool isTextReplacement,
+    string fakeName,
+    string finalTemp)
+        {
+
+            if (!File.Exists(fakeName))
+            {
+                throw new FileNotFoundException(
+                    "Temporary bundle missing.",
+                    fakeName);
+            }
+
+            DebugStr(
+                "[CHECK] ===== PRE-PACK CONTAINER VALIDATION =====");
+
             ValidateBundleContainer(fakeName);
 
             AssetsManager am = new AssetsManager();
-            string finalTemp = realName + ".new";
+
+            DeleteFileIfExists(finalTemp);
+
             try
             {
-                BundleFileInstance bun = am.LoadBundleFile(fakeName);
-                if (bun == null)
-                    throw new InvalidDataException("Could not reopen temporary bundle.");
+                BundleFileInstance bun =
+                    am.LoadBundleFile(fakeName);
 
-                using (var stream = new FileStream(finalTemp, FileMode.Create, FileAccess.Write, FileShare.None))
-                using (var writer = new AssetsFileWriter(stream))
+                if (bun == null)
                 {
-                    DebugStr($"[PACK] Packing with the original project API using original compression={originalCompression}.");
-                    bun.file.Pack(bun.file.Reader, writer, originalCompression);
+                    throw new InvalidDataException(
+                        "Could not reopen temporary bundle.");
+                }
+
+                using (var stream =
+                    new FileStream(
+                        finalTemp,
+                        FileMode.CreateNew,
+                        FileAccess.Write,
+                        FileShare.None))
+                using (var writer =
+                    new AssetsFileWriter(stream))
+                {
+                    DebugStr(
+                        $"[PACK] Packing with the original project API " +
+                        $"using original compression={originalCompression}.");
+
+                    DebugStr($"[PACK] Source staging bundle length={new FileInfo(fakeName).Length}");
+                    bun.file.Pack(
+                        bun.file.Reader,
+                        writer,
+                        originalCompression);
+                    DebugStr($"[PACK] Finished pack write to '{finalTemp}'.");
                 }
 
                 if (!am.UnloadAllBundleFiles())
-                    DisplayStr("[PACK] Could not unload temporary bundle handles.");
+                {
+                    DisplayStr(
+                        "[PACK] Could not unload temporary bundle handles.");
+                }
 
-                string finalSha = Sha256File(finalTemp);
-                DebugStr($"[CHECK] PACKED .new length={new FileInfo(finalTemp).Length} SHA256={finalSha}");
+                string finalSha =
+                    Sha256File(finalTemp);
 
-                DebugStr("[CHECK] ===== FINAL CONTAINER VALIDATION =====");
-                ValidateBundleContainer(finalTemp);
+                DebugStr(
+                    $"[CHECK] PACKED staging bundle length=" +
+                    $"{new FileInfo(finalTemp).Length} " +
+                    $"SHA256={finalSha}");
+
+                DebugStr(
+                    "[CHECK] ===== FINAL CONTAINER VALIDATION =====");
+
+                ValidateBundleContainer(
+                    finalTemp);
 
                 ValidateFinalBundle(
                     finalTemp,
                     assetfileName,
                     targetPathId,
                     dumpPath,
+                    fileKind,
                     expectedTargetData,
                     beforeSnapshot,
                     originalCompression,
@@ -276,30 +695,215 @@ namespace UAFGJ
                     expectedTargetTypeId,
                     isTextReplacement);
 
-                if (string.Equals(finalSha, originalBundleSha, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(
+                    finalSha,
+                    originalBundleSha,
+                    StringComparison.OrdinalIgnoreCase))
                 {
-                    throw new InvalidDataException("The final bundle SHA256 is identical to the input bundle. Refusing to replace because no binary change was detected.");
+                    DebugStr(
+                        "[CHECK] Whole-bundle SHA matches input. " +
+                        "This is not treated as an import failure; " +
+                        "the validated target payload is authoritative.");
+                }
+                else
+                {
+                    DebugStr(
+                        "[CHECK] Whole-bundle SHA differs from input. " +
+                        "Binary change detected.");
                 }
 
-                DebugStr("[CHECK] ===== ALL PRE-REPLACE CHECKS PASSED =====");
-                DebugStr($"[CHECK] INPUT  SHA256={originalBundleSha} length={originalBundleLength}");
-                DebugStr($"[CHECK] OUTPUT SHA256={finalSha} length={new FileInfo(finalTemp).Length}");
+                DebugStr(
+                    "[CHECK] ===== ALL PRE-REPLACE CHECKS PASSED =====");
 
-                File.Move(finalTemp, realName, true);
-                string committedSha = Sha256File(realName);
-                DebugStr($"[CHECK] COMMITTED bundle SHA256={committedSha} length={new FileInfo(realName).Length}");
+                DebugStr(
+                    $"[CHECK] INPUT  SHA256={originalBundleSha} " +
+                    $"length={originalBundleLength}");
 
-                if (!string.Equals(committedSha, finalSha, StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidDataException("Committed bundle SHA256 differs from validated .new file.");
+                DebugStr(
+                    $"[CHECK] OUTPUT SHA256={finalSha} " +
+                    $"length={new FileInfo(finalTemp).Length}");
 
-                if (File.Exists(fakeName))
-                    File.Delete(fakeName);
+                LogFileState("[SAVE] FINAL STAGING BEFORE COMMIT", finalTemp);
+                DebugStr($"[SAVE] Committing validated staging file to '{realName}'.");
+                ReplaceFileWithRetry(
+                    finalTemp,
+                    realName);
+                DebugStr("[SAVE] Commit operation returned successfully.");
+
+                string committedSha =
+                    Sha256File(realName);
+
+                DebugStr(
+                    $"[CHECK] COMMITTED bundle SHA256={committedSha} " +
+                    $"length={new FileInfo(realName).Length}");
+
+                if (!string.Equals(
+                    committedSha,
+                    finalSha,
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidDataException(
+                        "Committed bundle SHA256 differs from the validated staging file.");
+                }
+
             }
             finally
             {
-                try { am.UnloadAllAssetsFiles(true); } catch { }
-                try { am.UnloadAllBundleFiles(); } catch { }
+                try
+                {
+                    am.UnloadAllAssetsFiles(true);
+                }
+                catch
+                {
+                }
+
+                try
+                {
+                    am.UnloadAllBundleFiles();
+                }
+                catch
+                {
+                }
+                DeleteFileIfExists(fakeName);
+                DeleteFileIfExists(finalTemp);
             }
+        }
+
+        private static void CleanupStaleBundleStages(string bundlePath)
+        {
+            try
+            {
+                string directory = Path.GetDirectoryName(bundlePath);
+                string fileName = Path.GetFileName(bundlePath);
+
+                if (string.IsNullOrEmpty(directory) ||
+                    string.IsNullOrEmpty(fileName) ||
+                    !Directory.Exists(directory))
+                {
+                    return;
+                }
+
+                string[] patterns =
+                {
+                    fileName + ".uafgj_stage1_*.tmp",
+                    fileName + ".uafgj_stage2_*.tmp"
+                };
+
+                foreach (string pattern in patterns)
+                {
+                    foreach (string path in Directory.GetFiles(directory, pattern))
+                    {
+                        DeleteFileIfExists(path);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                DebugStr(
+                    "[CLEANUP] Could not scan for stale staging files: " +
+                    ex.GetType().Name + ": " + ex.Message);
+            }
+        }
+
+        private static void DeleteFileIfExists(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                return;
+
+            try
+            {
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
+            catch (Exception ex)
+            {
+                DebugStr(
+                    $"[CLEANUP] Could not delete temporary file '{path}': " +
+                    $"{ex.GetType().Name}: {ex.Message}");
+            }
+        }
+
+        private static void ReplaceFileWithRetry(
+            string sourcePath,
+            string destinationPath)
+        {
+            const int maxAttempts = 10;
+            const int delayMs = 250;
+            Exception lastError = null;
+
+            if (!File.Exists(sourcePath))
+                throw new FileNotFoundException(
+                    "Replacement file does not exist.",
+                    sourcePath);
+
+            for (int attempt = 1; attempt <= maxAttempts; attempt++)
+            {
+                try
+                {
+                    if (File.Exists(destinationPath))
+                    {
+                        try
+                        {
+                            File.Replace(
+                                sourcePath,
+                                destinationPath,
+                                null,
+                                true);
+                        }
+                        catch (PlatformNotSupportedException)
+                        {
+                            File.Move(
+                                sourcePath,
+                                destinationPath,
+                                true);
+                        }
+                        catch (NotSupportedException)
+                        {
+                            File.Move(
+                                sourcePath,
+                                destinationPath,
+                                true);
+                        }
+                        catch (IOException)
+                        {
+                            // Some filesystems do not support Replace even
+                            // though overwrite-by-move is available.
+                            File.Move(
+                                sourcePath,
+                                destinationPath,
+                                true);
+                        }
+                    }
+                    else
+                    {
+                        File.Move(
+                            sourcePath,
+                            destinationPath);
+                    }
+
+                    return;
+                }
+                catch (IOException ex)
+                {
+                    lastError = ex;
+                }
+                catch (UnauthorizedAccessException ex)
+                {
+                    lastError = ex;
+                }
+
+                if (attempt < maxAttempts)
+                {
+                    DebugStr(
+                        $"[SAVE] Destination temporarily unavailable; " +
+                        $"retry {attempt}/{maxAttempts - 1}...");
+                    Thread.Sleep(delayMs);
+                }
+            }
+
+            throw new IOException(
+                $"Could not replace '{destinationPath}' after {maxAttempts} attempts.",
+                lastError);
         }
 
         private static void ValidateBundleContainer(string bundlePath)
@@ -386,6 +990,7 @@ namespace UAFGJ
             string assetfileName,
             long targetPathId,
             string dumpPath,
+            string fileKind,
             byte[] expectedTargetData,
             AssetsFileSnapshot beforeSnapshot,
             AssetBundleCompressionType originalCompression,
@@ -393,136 +998,744 @@ namespace UAFGJ
             int expectedTargetTypeId,
             bool isTextReplacement)
         {
-            AssetsManager am = new AssetsManager();
+            AssetsManager am =
+                new AssetsManager();
+
             try
             {
-                BundleFileInstance bundle = am.LoadBundleFile(bundlePath, true);
+                // ============================================================
+                // NORMALIZE KIND
+                // ============================================================
+
+                if (string.IsNullOrWhiteSpace(fileKind))
+                {
+                    fileKind =
+                        "MONOBEHAVIOUR_FULL_CHECKED";
+
+                    DebugStr(
+                        "[CHECK] fileKind empty; " +
+                        "using MONOBEHAVIOUR_FULL_CHECKED.");
+                }
+
+                // ============================================================
+                // LOAD FINAL BUNDLE
+                // ============================================================
+
+                BundleFileInstance bundle =
+                    am.LoadBundleFile(
+                        bundlePath,
+                        true);
+
                 if (bundle == null)
-                    throw new InvalidDataException("Final bundle cannot be reopened.");
+                {
+                    throw new InvalidDataException(
+                        "Final bundle cannot be reopened.");
+                }
 
-                AssetBundleCompressionType finalCompression = bundle.file.GetCompressionType(bundle.file.BlockAndDirInfo.BlockInfos);
-                var finalDirectoryNames = bundle.file.BlockAndDirInfo.DirectoryInfos.Select(d => d.Name).ToList();
+                // ============================================================
+                // CONTAINER VALIDATION
+                // ============================================================
 
-                if (finalCompression != originalCompression)
-                    throw new InvalidDataException($"Compression changed: original={originalCompression}, final={finalCompression}");
+                AssetBundleCompressionType finalCompression =
+                    bundle.file.GetCompressionType(
+                        bundle.file.BlockAndDirInfo.BlockInfos);
 
-                if (!originalDirectoryNames.SequenceEqual(finalDirectoryNames, StringComparer.Ordinal))
-                    throw new InvalidDataException("Bundle directory entry names/order changed after repack.");
+                var finalDirectoryNames =
+                    bundle.file.BlockAndDirInfo.DirectoryInfos
+                        .Select(d => d.Name)
+                        .ToList();
 
-                DebugStr($"[CHECK] Final compression={finalCompression}; directory layout identical ({finalDirectoryNames.Count} entries).");
+                if (finalCompression !=
+                    originalCompression)
+                {
+                    throw new InvalidDataException(
+                        $"Compression changed: " +
+                        $"original={originalCompression}, " +
+                        $"final={finalCompression}");
+                }
 
-                int fileIndex = bundle.file.GetFileIndex(assetfileName);
+                if (!originalDirectoryNames.SequenceEqual(
+                        finalDirectoryNames,
+                        StringComparer.Ordinal))
+                {
+                    throw new InvalidDataException(
+                        "Bundle directory entry names/order changed after repack.");
+                }
+
+                DebugStr(
+                    $"[CHECK] Final compression={finalCompression}; " +
+                    $"directory layout identical " +
+                    $"({finalDirectoryNames.Count} entries).");
+
+                // ============================================================
+                // FIND EXPECTED ASSETS FILE
+                // ============================================================
+
+                int fileIndex =
+                    bundle.file.GetFileIndex(
+                        assetfileName);
+
                 if (fileIndex < 0)
-                    throw new InvalidDataException("Expected assets file entry is missing: " + assetfileName);
+                {
+                    throw new InvalidDataException(
+                        "Expected assets file entry is missing: " +
+                        assetfileName);
+                }
 
-                AssetsFileInstance inst = am.LoadAssetsFileFromBundle(bundle, fileIndex, true);
+                AssetsFileInstance inst =
+                    am.LoadAssetsFileFromBundle(
+                        bundle,
+                        fileIndex,
+                        true);
+
                 if (inst == null)
-                    throw new InvalidDataException("Expected assets file could not be reopened: " + assetfileName);
+                {
+                    throw new InvalidDataException(
+                        "Expected assets file could not be reopened: " +
+                        assetfileName);
+                }
 
-                AssetsFileSnapshot afterSnapshot = CaptureAssetsFileSnapshot(am, inst, assetfileName);
-                DebugStr($"[CHECK] AFTER assets '{assetfileName}' SHA256={afterSnapshot.Sha256} serializedLength={afterSnapshot.SerializedLength} assets={afterSnapshot.Assets.Count}");
+                // ============================================================
+                // SNAPSHOT AFTER
+                // ============================================================
 
-                if (afterSnapshot.Assets.Count != beforeSnapshot.Assets.Count)
-                    throw new InvalidDataException($"Asset count changed: before={beforeSnapshot.Assets.Count} after={afterSnapshot.Assets.Count}");
+                AssetsFileSnapshot afterSnapshot =
+                    CaptureAssetsFileSnapshot(
+                        am,
+                        inst,
+                        assetfileName);
+
+                DebugStr(
+                    $"[CHECK] AFTER assets '{assetfileName}' " +
+                    $"SHA256={afterSnapshot.Sha256} " +
+                    $"serializedLength={afterSnapshot.SerializedLength} " +
+                    $"assets={afterSnapshot.Assets.Count}");
+
+                // ============================================================
+                // ASSET COUNT
+                // ============================================================
+
+                if (afterSnapshot.Assets.Count !=
+                    beforeSnapshot.Assets.Count)
+                {
+                    throw new InvalidDataException(
+                        $"Asset count changed: " +
+                        $"before={beforeSnapshot.Assets.Count} " +
+                        $"after={afterSnapshot.Assets.Count}");
+                }
+
+                // ============================================================
+                // VERIFY ALL ASSETS
+                // ============================================================
 
                 foreach (var before in beforeSnapshot.Assets)
                 {
-                    var after = afterSnapshot.Assets.FirstOrDefault(a => a.PathId == before.PathId);
+                    var after =
+                        afterSnapshot.Assets.FirstOrDefault(
+                            a => a.PathId == before.PathId);
+
                     if (after == null)
-                        throw new InvalidDataException("PathID disappeared after rewrite: " + before.PathId);
-
-                    if (after.TypeId != before.TypeId)
-                        throw new InvalidDataException($"TypeID changed for PID {before.PathId}: {before.TypeId}->{after.TypeId}");
-
-                    if (after.MonoScriptIndex != before.MonoScriptIndex)
-                        throw new InvalidDataException($"MonoScriptIndex changed for PID {before.PathId}: {before.MonoScriptIndex}->{after.MonoScriptIndex}");
-
-                    if (before.PathId != targetPathId &&
-                        !string.Equals(before.SerializedSha256, after.SerializedSha256, StringComparison.OrdinalIgnoreCase))
                     {
                         throw new InvalidDataException(
-                            $"UNEXPECTED ASSET CHANGE: PID={before.PathId} " +
-                            $"name='{before.Name}' " +
-                            $"SHA {before.SerializedSha256}->{after.SerializedSha256}");
+                            "PathID disappeared after rewrite: " +
+                            before.PathId);
+                    }
+
+                    // --------------------------------------------------------
+                    // TypeID must never change.
+                    // --------------------------------------------------------
+
+                    if (after.TypeId !=
+                        before.TypeId)
+                    {
+                        throw new InvalidDataException(
+                            $"TypeID changed for PID " +
+                            $"{before.PathId}: " +
+                            $"{before.TypeId}->{after.TypeId}");
+                    }
+
+                    // --------------------------------------------------------
+                    // MonoScriptIndex must never change.
+                    // --------------------------------------------------------
+
+                    if (after.MonoScriptIndex !=
+                        before.MonoScriptIndex)
+                    {
+                        throw new InvalidDataException(
+                            $"MonoScriptIndex changed for PID " +
+                            $"{before.PathId}: " +
+                            $"{before.MonoScriptIndex}->" +
+                            $"{after.MonoScriptIndex}");
+                    }
+
+                    // --------------------------------------------------------
+                    // Every NON-TARGET asset must remain byte-for-byte
+                    // identical at serialized BaseField level.
+                    //
+                    // The target is deliberately excluded because it is
+                    // the only object we are modifying.
+                    // --------------------------------------------------------
+
+                    if (before.PathId != targetPathId)
+                    {
+                        if (!string.Equals(
+                            before.SerializedSha256,
+                            after.SerializedSha256,
+                            StringComparison.OrdinalIgnoreCase))
+                        {
+                            throw new InvalidDataException(
+                                $"UNEXPECTED ASSET CHANGE: " +
+                                $"PID={before.PathId} " +
+                                $"name='{before.Name}' " +
+                                $"SHA " +
+                                $"{before.SerializedSha256}->" +
+                                $"{after.SerializedSha256}");
+                        }
                     }
                 }
 
-                var targetBefore = beforeSnapshot.Assets.FirstOrDefault(a => a.PathId == targetPathId);
+                // ============================================================
+                // TARGET BEFORE
+                // ============================================================
+
+                var targetBefore =
+                    beforeSnapshot.Assets.FirstOrDefault(
+                        a => a.PathId == targetPathId);
+
                 if (targetBefore == null)
-                    throw new InvalidDataException("Target PathID was not present in the original snapshot: " + targetPathId);
+                {
+                    throw new InvalidDataException(
+                        "Target PathID was not present in the original snapshot: " +
+                        targetPathId);
+                }
 
-                var targetInfo = inst.file.AssetInfos.FirstOrDefault(a => a.PathId == targetPathId);
+                // ============================================================
+                // TARGET AFTER
+                // ============================================================
+
+                var targetInfo =
+                    inst.file.AssetInfos.FirstOrDefault(
+                        a => a.PathId == targetPathId);
+
                 if (targetInfo == null)
-                    throw new InvalidDataException("Target PathID missing after repack: " + targetPathId);
+                {
+                    throw new InvalidDataException(
+                        "Target PathID missing after repack: " +
+                        targetPathId);
+                }
 
-                // The target type must remain exactly the same as before the replacement.
-                if (targetInfo.TypeId != expectedTargetTypeId)
-                    throw new InvalidDataException($"Target TypeID changed: original={expectedTargetTypeId}, final={targetInfo.TypeId}");
+                // ============================================================
+                // TARGET TYPE
+                // ============================================================
 
-                DebugStr($"[CHECK] Target type preserved: PID={targetInfo.PathId}, TypeID={targetInfo.TypeId}");
+                if (targetInfo.TypeId !=
+                    expectedTargetTypeId)
+                {
+                    throw new InvalidDataException(
+                        $"Target TypeID changed: " +
+                        $"original={expectedTargetTypeId}, " +
+                        $"final={targetInfo.TypeId}");
+                }
 
-                ushort finalMonoId = inst.file.GetScriptIndex(targetInfo);
+                DebugStr(
+                    $"[CHECK] Target type preserved: " +
+                    $"PID={targetInfo.PathId}, " +
+                    $"TypeID={targetInfo.TypeId}");
 
-                // Only MonoBehaviour (114) requires a valid MonoScript index.
+                // ============================================================
+                // MONOSCRIPT INDEX
+                // ============================================================
+
+                ushort finalMonoId =
+                    inst.file.GetScriptIndex(
+                        targetInfo);
+
                 if (expectedTargetTypeId == 114)
                 {
                     if (finalMonoId == 0xFFFF)
-                        throw new InvalidDataException("Target MonoBehaviour lost its MonoScript index.");
+                    {
+                        throw new InvalidDataException(
+                            "Target MonoBehaviour lost its MonoScript index.");
+                    }
 
-                    DebugStr($"[CHECK] Target MonoScriptIndex={finalMonoId} (0x{finalMonoId:X4})");
+                    DebugStr(
+                        $"[CHECK] Target MonoScriptIndex=" +
+                        $"{finalMonoId} " +
+                        $"(0x{finalMonoId:X4})");
+
+                    // The MonoScriptIndex must also equal the original one.
+                    if (finalMonoId !=
+                        targetBefore.MonoScriptIndex)
+                    {
+                        throw new InvalidDataException(
+                            $"Target MonoScriptIndex changed: " +
+                            $"original={targetBefore.MonoScriptIndex}, " +
+                            $"final={finalMonoId}");
+                    }
                 }
                 else
                 {
-                    DebugStr($"[CHECK] Non-MonoBehaviour target; MonoScriptIndex={finalMonoId} (0x{finalMonoId:X4}) accepted.");
+                    DebugStr(
+                        $"[CHECK] Non-MonoBehaviour target; " +
+                        $"MonoScriptIndex={finalMonoId} " +
+                        $"(0x{finalMonoId:X4}) accepted.");
                 }
 
-                var targetField = am.GetBaseField(inst, targetInfo);
-                if (targetField == null || targetField.IsDummy)
-                    throw new InvalidDataException("Final target base field is null/dummy.");
+                // ============================================================
+                // DETERMINE RAW TEXT MODE
+                // ============================================================
 
-                byte[] finalTargetData = targetField.WriteToByteArray();
-                string finalTargetSha = Sha256Hex(finalTargetData);
-                string expectedTargetSha = Sha256Hex(expectedTargetData);
+                bool rawTextKind =
+                    expectedTargetTypeId == 114 &&
+                    (
+                        string.Equals(
+                            fileKind,
+                            "MONOBEHAVIOUR_TEXT",
+                            StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(
+                            fileKind,
+                            "MONOBEHAVIOUR_TEXT_CHECKED",
+                            StringComparison.OrdinalIgnoreCase)
+                    );
 
-                DebugStr($"[CHECK] Target payload SHA expected={expectedTargetSha} actual={finalTargetSha}, bytes expected={expectedTargetData.Length} actual={finalTargetData.Length}");
+                // ============================================================
+                // GET TARGET BASE FIELD
+                //
+                // TEXT:
+                //     no BaseField required.
+                //
+                // TEXT_CHECKED:
+                //     BaseField REQUIRED because scalar validation is required.
+                //
+                // FULL / FONT:
+                //     BaseField REQUIRED.
+                // ============================================================
 
-                if (!string.Equals(finalTargetSha, expectedTargetSha, StringComparison.OrdinalIgnoreCase) ||
-                    finalTargetData.Length != expectedTargetData.Length)
+                AssetsTools.NET.AssetTypeValueField targetField =
+                    null;
+
+                bool needsBaseField =
+                    !rawTextKind ||
+                    string.Equals(
+                        fileKind,
+                        "MONOBEHAVIOUR_TEXT_CHECKED",
+                        StringComparison.OrdinalIgnoreCase);
+
+                if (needsBaseField)
                 {
-                    throw new InvalidDataException("Final target payload does not match the in-memory replacement payload.");
+                    try
+                    {
+                        targetField =
+                            am.GetBaseField(
+                                inst,
+                                targetInfo);
+                    }
+                    catch (Exception ex)
+                    {
+                        throw new InvalidDataException(
+                            $"Could not obtain final target BaseField " +
+                            $"for kind '{fileKind}'.",
+                            ex);
+                    }
                 }
 
-                // TXT is valid for MonoBehaviour (114) and TextAsset (49).
+                // ============================================================
+                // BASE FIELD REQUIREMENT
+                // ============================================================
+
+                if (needsBaseField)
+                {
+                    if (targetField == null ||
+                        targetField.IsDummy)
+                    {
+                        throw new InvalidDataException(
+                            $"Final target BaseField is null/dummy " +
+                            $"for fileKind='{fileKind}'. " +
+                            "This mode requires a usable TypeTree.");
+                    }
+                }
+
+                // ============================================================
+                // READ FINAL TARGET PAYLOAD
+                //
+                // RAW TEXT modes:
+                //     read the real serialized bytes directly from the asset.
+                //
+                // Other modes:
+                //     serialize the final BaseField.
+                // ============================================================
+
+                byte[] finalTargetData;
+
+                if (rawTextKind)
+                {
+                    finalTargetData =
+                        ReadRawAssetBytes(
+                            inst,
+                            targetInfo);
+                }
+                else
+                {
+                    finalTargetData =
+                        targetField.WriteToByteArray();
+                }
+
+                if (finalTargetData == null ||
+                    finalTargetData.Length == 0)
+                {
+                    throw new InvalidDataException(
+                        "Final target payload is null or empty.");
+                }
+
+                if (expectedTargetData == null ||
+                    expectedTargetData.Length == 0)
+                {
+                    throw new InvalidDataException(
+                        "Expected target replacement payload is null or empty.");
+                }
+
+                string finalTargetSha =
+                    Sha256Hex(
+                        finalTargetData);
+
+                bool targetChanged =
+                    targetBefore != null &&
+                    !string.Equals(
+                        targetBefore.SerializedSha256,
+                        finalTargetSha,
+                        StringComparison.OrdinalIgnoreCase);
+
+                DebugStr(
+                    $"[CHECK] TARGET CHANGE: changed={targetChanged}, " +
+                    $"before={targetBefore?.SerializedSha256}, " +
+                    $"after={finalTargetSha}");
+
+                string expectedTargetSha =
+                    Sha256Hex(
+                        expectedTargetData);
+
+                DebugStr(
+                    $"[CHECK] Target payload SHA " +
+                    $"expected={expectedTargetSha} " +
+                    $"actual={finalTargetSha}, " +
+                    $"bytes expected={expectedTargetData.Length} " +
+                    $"actual={finalTargetData.Length}");
+
+                // ============================================================
+                // EXACT TARGET PAYLOAD VALIDATION
+                // ============================================================
+
+                if (finalTargetData.Length !=
+                    expectedTargetData.Length)
+                {
+                    throw new InvalidDataException(
+                        $"Final target payload length mismatch: " +
+                        $"expected={expectedTargetData.Length}, " +
+                        $"actual={finalTargetData.Length}");
+                }
+
+                if (!string.Equals(
+                    finalTargetSha,
+                    expectedTargetSha,
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidDataException(
+                        "Final target payload does not match " +
+                        "the in-memory replacement payload.");
+                }
+
+                DebugStr(
+                    "[CHECK] Final target payload matches " +
+                    "the intended replacement data.");
+
+                // ============================================================
+                // TXT VALIDATION
+                // ============================================================
+
                 if (isTextReplacement)
                 {
-                    if (expectedTargetTypeId != 114 && expectedTargetTypeId != 49)
+                    // --------------------------------------------------------
+                    // Only TypeID 49 and 114 are supported TXT targets.
+                    // --------------------------------------------------------
+
+                    if (expectedTargetTypeId != 49 &&
+                        expectedTargetTypeId != 114)
                     {
                         throw new InvalidDataException(
                             "TXT replacement requested, but target TypeID " +
-                            expectedTargetTypeId +
-                            " is not supported (114=MonoBehaviour, 49=TextAsset).");
+                            $"{expectedTargetTypeId} is unsupported.");
                     }
 
-                    ValidateDumpAgainstBaseField(
-                        dumpPath,
-                        targetField);
+                    // ========================================================
+                    // TEXTASSET - TYPEID 49
+                    // ========================================================
 
-                    if (expectedTargetTypeId == 114)
-                        DebugStr("[CHECK] Final MonoBehaviour TXT dump/value validation PASSED.");
+                    if (expectedTargetTypeId == 49)
+                    {
+                        if (targetField == null ||
+                            targetField.IsDummy)
+                        {
+                            throw new InvalidDataException(
+                                "TextAsset validation requires a valid BaseField.");
+                        }
+
+                        ValidateDumpAgainstBaseField(
+                            dumpPath,
+                            targetField);
+
+                        DebugStr(
+                            "[CHECK] TextAsset TXT validation PASSED.");
+                    }
+
+                    // ========================================================
+                    // MONOBEHAVIOUR - TYPEID 114
+                    // ========================================================
+
                     else
-                        DebugStr("[CHECK] Final TextAsset TXT dump/value validation PASSED.");
+                    {
+                        // ----------------------------------------------------
+                        // MONOBEHAVIOUR_TEXT
+                        //
+                        // RAW ONLY.
+                        //
+                        // No scalar validation.
+                        // No full dump validation.
+                        // No BaseField required.
+                        // ----------------------------------------------------
+
+                        if (string.Equals(
+                            fileKind,
+                            "MONOBEHAVIOUR_TEXT",
+                            StringComparison.OrdinalIgnoreCase))
+                        {
+                            DebugStr(
+                                "[CHECK] MONOBEHAVIOUR_TEXT: " +
+                                "RAW m_text payload validation PASSED. " +
+                                "No scalar validation requested.");
+                        }
+
+                        // ----------------------------------------------------
+                        // MONOBEHAVIOUR_TEXT_CHECKED
+                        //
+                        // RAW write + scalar validation.
+                        //
+                        // IMPORTANT:
+                        // The write itself was RAW and therefore did not need
+                        // a TypeTree.
+                        //
+                        // The CHECKED mode DOES require a usable BaseField
+                        // because we explicitly want scalar validation.
+                        // ----------------------------------------------------
+
+                        else if (string.Equals(
+                            fileKind,
+                            "MONOBEHAVIOUR_TEXT_CHECKED",
+                            StringComparison.OrdinalIgnoreCase))
+                        {
+                            if (targetField == null ||
+                                targetField.IsDummy)
+                            {
+                                throw new InvalidDataException(
+                                    "MONOBEHAVIOUR_TEXT_CHECKED requires a valid " +
+                                    "AssetsTools.NET BaseField for scalar validation.");
+                            }
+
+                            // ------------------------------------------------
+                            // Put the translated m_text into the validation
+                            // BaseField.
+                            //
+                            // The actual asset was already written through the
+                            // RAW path. This assignment is ONLY for validation.
+                            // ------------------------------------------------
+
+                            string checkedMText =
+                                ReadDumpMText(
+                                    dumpPath);
+
+                            AssetsTools.NET.AssetTypeValueField checkedTextField;
+
+                            try
+                            {
+                                checkedTextField =
+                                    targetField["m_text"];
+                            }
+                            catch (Exception ex)
+                            {
+                                throw new InvalidDataException(
+                                    "MONOBEHAVIOUR_TEXT_CHECKED could not access " +
+                                    "the m_text field of the final BaseField.",
+                                    ex);
+                            }
+
+                            if (checkedTextField == null ||
+                                checkedTextField.IsDummy)
+                            {
+                                throw new InvalidDataException(
+                                    "MONOBEHAVIOUR_TEXT_CHECKED found a null/dummy " +
+                                    "m_text field in the final BaseField.");
+                            }
+
+                            try
+                            {
+                                checkedTextField.AsString =
+                                    checkedMText;
+                            }
+                            catch (Exception ex)
+                            {
+                                throw new InvalidDataException(
+                                    "MONOBEHAVIOUR_TEXT_CHECKED could not assign " +
+                                    "the replacement m_text to the validation BaseField.",
+                                    ex);
+                            }
+
+                            DebugStr(
+                                $"[CHECK] MONOBEHAVIOUR_TEXT_CHECKED: " +
+                                $"running scalar validation with " +
+                                $"m_text length={checkedMText.Length}");
+
+                            // ------------------------------------------------
+                            // IMPORTANT:
+                            //
+                            // This is the actual scalar-by-scalar validation.
+                            // ------------------------------------------------
+
+                            ValidateDumpAgainstBaseField(
+                                dumpPath,
+                                targetField);
+
+                            DebugStr(
+                                "[CHECK] MONOBEHAVIOUR_TEXT_CHECKED: " +
+                                "m_text + scalar validation PASSED.");
+                        }
+
+                        // ----------------------------------------------------
+                        // MONOBEHAVIOUR_FONT
+                        //
+                        // Full replacement.
+                        // No scalar validation.
+                        // ----------------------------------------------------
+
+                        else if (string.Equals(
+                            fileKind,
+                            "MONOBEHAVIOUR_FONT",
+                            StringComparison.OrdinalIgnoreCase))
+                        {
+                            DebugStr(
+                                "[CHECK] MONOBEHAVIOUR_FONT: " +
+                                "full payload validation PASSED. " +
+                                "No scalar validation requested.");
+                        }
+
+                        // ----------------------------------------------------
+                        // MONOBEHAVIOUR_FONT_CHECKED
+                        //
+                        // Full replacement + scalar validation.
+                        // ----------------------------------------------------
+
+                        else if (string.Equals(
+                            fileKind,
+                            "MONOBEHAVIOUR_FONT_CHECKED",
+                            StringComparison.OrdinalIgnoreCase))
+                        {
+                            ValidateDumpAgainstBaseField(
+                                dumpPath,
+                                targetField);
+
+                            DebugStr(
+                                "[CHECK] MONOBEHAVIOUR_FONT_CHECKED: " +
+                                "full payload + scalar validation PASSED.");
+                        }
+
+                        // ----------------------------------------------------
+                        // MONOBEHAVIOUR_FULL
+                        //
+                        // Full replacement.
+                        // No scalar validation.
+                        // ----------------------------------------------------
+
+                        else if (string.Equals(
+                            fileKind,
+                            "MONOBEHAVIOUR_FULL",
+                            StringComparison.OrdinalIgnoreCase))
+                        {
+                            DebugStr(
+                                "[CHECK] MONOBEHAVIOUR_FULL: " +
+                                "full payload validation PASSED. " +
+                                "No scalar validation requested.");
+                        }
+
+                        // ----------------------------------------------------
+                        // MONOBEHAVIOUR_FULL_CHECKED
+                        //
+                        // Full replacement + scalar validation.
+                        // ----------------------------------------------------
+
+                        else if (string.Equals(
+                            fileKind,
+                            "MONOBEHAVIOUR_FULL_CHECKED",
+                            StringComparison.OrdinalIgnoreCase))
+                        {
+                            ValidateDumpAgainstBaseField(
+                                dumpPath,
+                                targetField);
+
+                            DebugStr(
+                                "[CHECK] MONOBEHAVIOUR_FULL_CHECKED: " +
+                                "full payload + scalar validation PASSED.");
+                        }
+
+                        // ----------------------------------------------------
+                        // UNKNOWN KIND
+                        // ----------------------------------------------------
+
+                        else
+                        {
+                            throw new InvalidDataException(
+                                $"Unknown MonoBehaviour fileKind '{fileKind}'.");
+                        }
+                    }
                 }
+
+                // ============================================================
+                // NON-TXT / GENERIC ASSET
+                // ============================================================
+
                 else
                 {
-                    DebugStr("[CHECK] Generic asset replacement payload validation PASSED.");
+                    DebugStr(
+                        "[CHECK] Generic asset replacement payload validation PASSED.");
                 }
+
+                // ============================================================
+                // FINAL SUCCESS
+                // ============================================================
+
+                DebugStr(
+                    $"[CHECK] FINAL VALIDATION PASSED: " +
+                    $"PID={targetPathId}, " +
+                    $"TypeID={expectedTargetTypeId}, " +
+                    $"kind='{fileKind}'.");
             }
             finally
             {
-                try { am.UnloadAllAssetsFiles(true); } catch { }
-                try { am.UnloadAllBundleFiles(); } catch { }
+                try
+                {
+                    am.UnloadAllAssetsFiles(true);
+                }
+                catch
+                {
+                }
+
+                try
+                {
+                    am.UnloadAllBundleFiles();
+                }
+                catch
+                {
+                }
             }
         }
+
 
         private static string TryGetName(AssetsTools.NET.AssetTypeValueField field)
         {
