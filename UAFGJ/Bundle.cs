@@ -34,11 +34,15 @@ namespace UAFGJ
             string specific_pathid,
             string fileKind)
         {
+            LogPhase($"Bundle start: bundle='{ab}', input='{input_file}', pathId='{specific_pathid}', kind='{fileKind}'.");
             string originalBundleSha =
                 Sha256File(ab);
 
             long originalBundleLength =
                 new FileInfo(ab).Length;
+
+            string classDataPath =
+                ResolveClassDataTpkPath();
 
             DebugStr(
                 $"[CHECK] INPUT bundle length={originalBundleLength} " +
@@ -50,24 +54,41 @@ namespace UAFGJ
 
             DebugStr(
                 $"[CHECK] classdata.tpk SHA256=" +
-                $"{(File.Exists("classdata.tpk") ? Sha256File("classdata.tpk") : "MISSING")}");
+                $"{(File.Exists(classDataPath) ? Sha256File(classDataPath) : "MISSING")}");
 
-            // Remove stale UAFGJ working files from an interrupted previous run.
+            // Unique staging files: no stale _temp/.new reuse.
+            string tempBundlePath =
+                ab + ".uafgj_stage1_" + Guid.NewGuid().ToString("N") + ".tmp";
+
+            string finalTempPath =
+                ab + ".uafgj_stage2_" + Guid.NewGuid().ToString("N") + ".tmp";
+
+            // Clean files created by older/interrupted UAFGJ runs.
+            DebugStr($"[TEMP] stage1='{tempBundlePath}'");
+            DebugStr($"[TEMP] stage2='{finalTempPath}'");
+            CleanupStaleBundleStages(ab);
             DeleteFileIfExists(ab + "_temp");
-            DeleteFileIfExists(ab + ".uafgj_tmp");
             DeleteFileIfExists(ab + ".new");
+            DeleteFileIfExists(ab + ".uafgj_tmp");
+            DebugStr("[TEMP] Stale temporary cleanup completed.");
 
             AssetsManager am =
                 new AssetsManager();
 
-            string tempBundlePath =
-                ab + "_temp";
+            ConfigureMonoBehaviourTemplateGenerator(
+                am,
+                ab);
 
-            string finalTempPath =
-                ab + ".uafgj_tmp";
+            if (string.IsNullOrWhiteSpace(classDataPath))
+            {
+                DisplayStr(
+                    "classdata.tpk not found in current or executable directory!");
+                return;
+            }
 
             try
             {
+                LogPhase("Loading bundle into AssetsManager.");
                 BundleFileInstance bundleInst =
                     GetBundleInst(
                         am,
@@ -84,6 +105,7 @@ namespace UAFGJ
                 if (string.IsNullOrEmpty(assetfile_name))
                     return;
 
+                LogPhase($"Loading contained assets file '{assetfile_name}'.");
                 AssetsFileInstance assetInst =
                     GetAssetInst(
                         am,
@@ -94,7 +116,7 @@ namespace UAFGJ
                 if (assetInst == null)
                     return;
 
-                if (!File.Exists("classdata.tpk"))
+                if (!File.Exists(classDataPath))
                 {
                     DisplayStr(
                         "classdata.tpk not found!");
@@ -127,6 +149,7 @@ namespace UAFGJ
                     $"[CHECK] INPUT bundle compression={originalCompression}; " +
                     $"directory entries={originalDirectoryNames.Count}");
 
+                LogPhase("Capturing pre-import assets snapshot.");
                 AssetsFileSnapshot beforeSnapshot =
                     CaptureAssetsFileSnapshot(
                         am,
@@ -160,6 +183,7 @@ namespace UAFGJ
                 // ============================================================
                 // IMPORT
                 // ============================================================
+                LogPhase($"Beginning import for kind='{fileKind}', input='{input_file}'.");
 
                 if (isTextReplacement)
                 {
@@ -225,6 +249,8 @@ namespace UAFGJ
                     originalTargetData =
                         null;
                 }
+
+                DebugStr("[CHECK] Import function returned; validating replacement state.");
 
                 // ============================================================
                 // VALIDATE IMPORT RESULT
@@ -328,6 +354,8 @@ namespace UAFGJ
                     $"bytes={rawReplacementData.Length} " +
                     $"SHA256={Sha256Hex(rawReplacementData)}");
 
+                LogPhase("Replacement data accepted; beginning save pipeline.");
+
                 // ============================================================
                 // SAVE
                 // ============================================================
@@ -344,8 +372,8 @@ namespace UAFGJ
                         afie,
                         assetInst,
                         bundleInst,
-                        ab,
-                        assetfile_name);
+                        assetfile_name,
+                        tempBundlePath);
                 }
                 else
                 {
@@ -354,8 +382,8 @@ namespace UAFGJ
                         afie,
                         assetInst,
                         bundleInst,
-                        ab,
                         assetfile_name,
+                        tempBundlePath,
                         Path.GetFileNameWithoutExtension(
                             input_file));
                 }
@@ -363,6 +391,7 @@ namespace UAFGJ
                 // ============================================================
                 // UNLOAD BEFORE FINAL PACK
                 // ============================================================
+                LogPhase("Releasing source bundle handles before final pack.");
 
                 if (!am.UnloadAllAssetsFiles(true))
                 {
@@ -379,6 +408,7 @@ namespace UAFGJ
                 // ============================================================
                 // FINAL PACK + VALIDATION
                 // ============================================================
+                LogPhase("Beginning final pack and validation.");
 
                 PackBundlePreservingFormat(
                     ab,
@@ -394,13 +424,16 @@ namespace UAFGJ
                     originalCompression,
                     originalDirectoryNames,
                     expectedTargetTypeId,
-                    isTextReplacement);
+                    isTextReplacement,
+                    tempBundlePath,
+                    finalTempPath);
 
                 DisplayStr(
                     "Done!");
             }
             catch (Exception ex)
             {
+                Environment.ExitCode = 1;
                 DisplayStr(
                     "[FATAL] Bundle handling failed: " +
                     ex.GetType().Name +
@@ -426,8 +459,8 @@ namespace UAFGJ
             AssetFileInfo afie,
             AssetsFileInstance assetInst,
             BundleFileInstance bundleInst,
-            string ab,
             string assetfile_name,
+            string tempBundle,
             string input_noext)
         {
             if (modifiedBaseField == null)
@@ -435,6 +468,7 @@ namespace UAFGJ
             if (afie == null)
                 throw new InvalidOperationException("Asset info is null.");
 
+            DebugStr($"[SAVE] Preparing generic asset replacement PID={afie.PathId}, TypeID={afie.TypeId}.");
             ushort monoId = assetInst.file.GetScriptIndex(afie);
             byte[] bytes = modifiedBaseField.WriteToByteArray();
             DebugStr($"[SAVE] Existing-asset replacer: PID={afie.PathId}, TypeID={afie.TypeId}, MonoScriptIndex={monoId} (0x{monoId:X4}), bytes={bytes.Length}, SHA256={Sha256Hex(bytes)}");
@@ -452,8 +486,8 @@ namespace UAFGJ
 
             DebugStr($"[SAVE] Inner assets file size={newAssetData.Length} SHA256={Sha256Hex(newAssetData)}");
 
-            string tempBundle = ab + "_temp";
-            using (var fileStream = new FileStream(tempBundle, FileMode.Create, FileAccess.Write, FileShare.None))
+            DebugStr($"[SAVE] Creating stage1 bundle '{tempBundle}'.");
+            using (var fileStream = new FileStream(tempBundle, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             using (var bunWriter = new AssetsFileWriter(fileStream))
             {
                 var bunRepl = new BundleReplacerFromMemory(assetfile_name, null, true, newAssetData, -1);
@@ -468,8 +502,8 @@ namespace UAFGJ
     AssetFileInfo afie,
     AssetsFileInstance assetInst,
     BundleFileInstance bundleInst,
-    string ab,
-    string assetfile_name)
+    string assetfile_name,
+    string tempBundle)
         {
             if (replacementData == null ||
                 replacementData.Length == 0)
@@ -506,9 +540,6 @@ namespace UAFGJ
                     monoId,
                     replacementData);
 
-            string tempBundle =
-                ab + "_temp";
-
             byte[] newAssetData;
 
             using (var stream =
@@ -536,7 +567,7 @@ namespace UAFGJ
             using (var fileStream =
                 new FileStream(
                     tempBundle,
-                    FileMode.Create,
+                    FileMode.CreateNew,
                     FileAccess.Write,
                     FileShare.None))
             using (var bunWriter =
@@ -578,9 +609,10 @@ namespace UAFGJ
     AssetBundleCompressionType originalCompression,
     List<string> originalDirectoryNames,
     int expectedTargetTypeId,
-    bool isTextReplacement)
+    bool isTextReplacement,
+    string fakeName,
+    string finalTemp)
         {
-            string fakeName = realName + "_temp";
 
             if (!File.Exists(fakeName))
             {
@@ -596,8 +628,7 @@ namespace UAFGJ
 
             AssetsManager am = new AssetsManager();
 
-            string finalTemp =
-                realName + ".uafgj_tmp";
+            DeleteFileIfExists(finalTemp);
 
             try
             {
@@ -613,7 +644,7 @@ namespace UAFGJ
                 using (var stream =
                     new FileStream(
                         finalTemp,
-                        FileMode.Create,
+                        FileMode.CreateNew,
                         FileAccess.Write,
                         FileShare.None))
                 using (var writer =
@@ -623,10 +654,12 @@ namespace UAFGJ
                         $"[PACK] Packing with the original project API " +
                         $"using original compression={originalCompression}.");
 
+                    DebugStr($"[PACK] Source staging bundle length={new FileInfo(fakeName).Length}");
                     bun.file.Pack(
                         bun.file.Reader,
                         writer,
                         originalCompression);
+                    DebugStr($"[PACK] Finished pack write to '{finalTemp}'.");
                 }
 
                 if (!am.UnloadAllBundleFiles())
@@ -668,8 +701,15 @@ namespace UAFGJ
                     StringComparison.OrdinalIgnoreCase))
                 {
                     DebugStr(
-                        "[CHECK] Final bundle is byte-identical to the input. " +
-                        "Continuing with the requested overwrite.");
+                        "[CHECK] Whole-bundle SHA matches input. " +
+                        "This is not treated as an import failure; " +
+                        "the validated target payload is authoritative.");
+                }
+                else
+                {
+                    DebugStr(
+                        "[CHECK] Whole-bundle SHA differs from input. " +
+                        "Binary change detected.");
                 }
 
                 DebugStr(
@@ -683,9 +723,12 @@ namespace UAFGJ
                     $"[CHECK] OUTPUT SHA256={finalSha} " +
                     $"length={new FileInfo(finalTemp).Length}");
 
+                LogFileState("[SAVE] FINAL STAGING BEFORE COMMIT", finalTemp);
+                DebugStr($"[SAVE] Committing validated staging file to '{realName}'.");
                 ReplaceFileWithRetry(
                     finalTemp,
                     realName);
+                DebugStr("[SAVE] Commit operation returned successfully.");
 
                 string committedSha =
                     Sha256File(realName);
@@ -723,6 +766,42 @@ namespace UAFGJ
                 }
                 DeleteFileIfExists(fakeName);
                 DeleteFileIfExists(finalTemp);
+            }
+        }
+
+        private static void CleanupStaleBundleStages(string bundlePath)
+        {
+            try
+            {
+                string directory = Path.GetDirectoryName(bundlePath);
+                string fileName = Path.GetFileName(bundlePath);
+
+                if (string.IsNullOrEmpty(directory) ||
+                    string.IsNullOrEmpty(fileName) ||
+                    !Directory.Exists(directory))
+                {
+                    return;
+                }
+
+                string[] patterns =
+                {
+                    fileName + ".uafgj_stage1_*.tmp",
+                    fileName + ".uafgj_stage2_*.tmp"
+                };
+
+                foreach (string pattern in patterns)
+                {
+                    foreach (string path in Directory.GetFiles(directory, pattern))
+                    {
+                        DeleteFileIfExists(path);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                DebugStr(
+                    "[CLEANUP] Could not scan for stale staging files: " +
+                    ex.GetType().Name + ": " + ex.Message);
             }
         }
 
@@ -1318,6 +1397,18 @@ namespace UAFGJ
                 string finalTargetSha =
                     Sha256Hex(
                         finalTargetData);
+
+                bool targetChanged =
+                    targetBefore != null &&
+                    !string.Equals(
+                        targetBefore.SerializedSha256,
+                        finalTargetSha,
+                        StringComparison.OrdinalIgnoreCase);
+
+                DebugStr(
+                    $"[CHECK] TARGET CHANGE: changed={targetChanged}, " +
+                    $"before={targetBefore?.SerializedSha256}, " +
+                    $"after={finalTargetSha}");
 
                 string expectedTargetSha =
                     Sha256Hex(

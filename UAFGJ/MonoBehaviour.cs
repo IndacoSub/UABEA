@@ -101,6 +101,8 @@ namespace UAFGJ
                 $"asset='{assetName}', " +
                 $"checked={checkedMode}");
 
+            LogPhase($"TEXT-only import starting PID={afie.PathId}, checked={checkedMode}.");
+
             // --------------------------------------------------------
             // RAW SERIALIZED PAYLOAD
             //
@@ -110,6 +112,7 @@ namespace UAFGJ
             // AssetsTools.NET vede un TypeTree dummy/incompleto.
             // --------------------------------------------------------
 
+            DebugStr($"[TXT] Reading raw serialized bytes for PID={afie.PathId}.");
             originalSerializedData =
                 ReadRawAssetBytes(
                     assetInst,
@@ -131,6 +134,7 @@ namespace UAFGJ
             // READ NEW m_text FROM DUMP
             // --------------------------------------------------------
 
+            DebugStr($"[TXT] Reading replacement m_text from '{inputFile}'.");
             string newText =
                 ReadDumpMText(
                     inputFile);
@@ -148,6 +152,7 @@ namespace UAFGJ
             // Non viene modificato nessun altro campo.
             // --------------------------------------------------------
 
+            DebugStr("[TXT] Replacing first Unity string candidate.");
             replacementData =
                 ReplaceFirstUnityString(
                     originalSerializedData,
@@ -284,6 +289,7 @@ namespace UAFGJ
                     inputFile);
             }
 
+            LogPhase($"FULL import starting PID={afie.PathId}, checked={checkedMode}.");
             DebugStr(
                 $"[TXT] Importing FULL MonoBehaviour " +
                 $"PID={afie.PathId}, " +
@@ -294,6 +300,7 @@ namespace UAFGJ
             // Load BaseField.
             // --------------------------------------------------------
 
+            DebugStr($"[TXT] Requesting BaseField from AssetsTools.NET for PID={afie.PathId}.");
             AssetTypeValueField baseField =
                 am.GetBaseField(
                     assetInst,
@@ -336,6 +343,8 @@ namespace UAFGJ
             // e poi applica il dump.
             // --------------------------------------------------------
 
+            DebugStr($"[TXT] FULL mode preflight selected: checked={checkedMode}.");
+
             if (checkedMode)
             {
                 DebugStr(
@@ -372,6 +381,7 @@ namespace UAFGJ
             // Serialize modified asset.
             // --------------------------------------------------------
 
+            DebugStr("[TXT] Serializing modified FULL BaseField.");
             replacementData =
                 baseField.WriteToByteArray();
 
@@ -512,78 +522,52 @@ namespace UAFGJ
             AssetTypeValueField baseField)
         {
             DebugStr(
-                "[TXT] Applying FULL dump without scalar validation.");
+                "[TXT] Applying FULL dump with structural path mapping (unchecked values).");
 
-            var dumpScalars =
-                ReadDumpScalars(
-                    inputFile);
-
-            var targetScalars =
-                CollectScalarFields(
-                    baseField);
+            // Structural preflight is mandatory even in unchecked mode.
+            // Every dump scalar must map to exactly one target scalar of the
+            // same type. Extra target scalars are allowed and remain unchanged.
+            // Most importantly, no field is mutated until the complete mapping
+            // has succeeded.
+            var matches = BuildDumpTargetMatches(
+                inputFile,
+                baseField,
+                false);
 
             DebugStr(
-                $"[TXT] UNCHECKED dump scalar count=" +
-                $"{dumpScalars.Count}; " +
-                $"target scalar count=" +
-                $"{targetScalars.Count}");
+                $"[TXT] FULL structural preflight passed for {matches.Count} mapped fields.");
 
-            int count =
-                Math.Min(
-                    dumpScalars.Count,
-                    targetScalars.Count);
-
-            for (int i = 0; i < count; i++)
+            for (int i = 0; i < matches.Count; i++)
             {
-                DumpScalar dump =
-                    dumpScalars[i];
-
-                AssetTypeValueField target =
-                    targetScalars[i];
+                var match = matches[i];
 
                 try
                 {
                     ApplyDumpValue(
-                        target,
-                        dump);
+                        match.Target.Field,
+                        match.Dump);
 
-                    if (i < 8 ||
-                        i == count - 1)
+                    if (i < 8 || i == matches.Count - 1)
                     {
                         DebugStr(
-                            $"[TXT] UNCHECKED applied #{i + 1}: " +
-                            $"dump='{dump.FieldName}', " +
-                            $"target='{target.TemplateField?.Name}'");
+                            $"[TXT] FULL applied #{i + 1}: " +
+                            $"path='{match.Dump.Path}' " +
+                            $"field='{match.Dump.FieldName}' type='{match.Dump.Type}'");
                     }
                 }
                 catch (Exception ex)
                 {
                     throw new InvalidDataException(
-                        $"Unable to apply unchecked dump " +
-                        $"scalar #{i + 1}: " +
-                        $"dump field='{dump.FieldName}', " +
-                        $"target field='{target.TemplateField?.Name}'.",
+                        $"Unable to apply FULL field #{i + 1}: " +
+                        $"path='{match.Dump.Path}', line={match.Dump.LineNumber}.",
                         ex);
                 }
             }
 
-            if (dumpScalars.Count !=
-                targetScalars.Count)
-            {
-                DebugStr(
-                    "[TXT] WARNING: unchecked scalar counts differ. " +
-                    $"Applied {count} common scalar fields; " +
-                    $"dump={dumpScalars.Count}, " +
-                    $"target={targetScalars.Count}.");
-            }
-
-            byte[] data =
-                baseField.WriteToByteArray();
+            byte[] data = baseField.WriteToByteArray();
 
             DebugStr(
-                $"[TXT] FULL unchecked BaseField reserialized: " +
-                $"{data.Length} bytes " +
-                $"SHA256={Sha256Hex(data)}");
+                $"[TXT] FULL BaseField reserialized: {data.Length} bytes SHA256={Sha256Hex(data)}");
 
             return data;
         }

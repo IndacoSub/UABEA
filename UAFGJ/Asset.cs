@@ -10,14 +10,35 @@ namespace UAFGJ
     {
         static private void HandleAsset(string asset, string input_file, string specific_pathid, string fileKind)
         {
+            LogPhase($"Asset-file start: asset='{asset}', input='{input_file}', pathId='{specific_pathid}', kind='{fileKind}'.");
             AssetsManager am = new AssetsManager();
             AssetsFileInstance assetInst = null;
 
-            string tempAssetPath = asset + "_temp";
-            DeleteFileIfExists(tempAssetPath);
+            ConfigureMonoBehaviourTemplateGenerator(
+                am,
+                asset);
+
+            string classDataPath =
+                ResolveClassDataTpkPath();
+
+            if (string.IsNullOrWhiteSpace(classDataPath))
+            {
+                DisplayStr(
+                    "classdata.tpk not found in current or executable directory!");
+                return;
+            }
+
+            string tempAssetPath =
+                asset + ".uafgj_stage_" +
+                Guid.NewGuid().ToString("N") + ".tmp";
+
+            CleanupStaleAssetStages(asset);
+            DeleteFileIfExists(asset + "_temp");
+            DeleteFileIfExists(asset + ".uafgj_tmp");
 
             try
             {
+                DebugStr("[ASSET] Loading AssetsFile.");
                 assetInst = am.LoadAssetsFile(asset, true);
                 if (assetInst == null)
                 {
@@ -25,13 +46,13 @@ namespace UAFGJ
                     return;
                 }
 
-                if (!File.Exists("classdata.tpk"))
+                if (!File.Exists(classDataPath))
                 {
                     DisplayStr("classdata.tpk not found!");
                     return;
                 }
 
-                ClassPackageFile meta_class = am.LoadClassPackage("classdata.tpk");
+                ClassPackageFile meta_class = am.LoadClassPackage(classDataPath);
                 ClassDatabaseFile meta_db = null;
                 if (!assetInst.file.Metadata.TypeTreeEnabled)
                     meta_db = am.LoadClassDatabaseFromPackage(assetInst.file.Metadata.UnityVersion);
@@ -43,6 +64,7 @@ namespace UAFGJ
                 byte[] rawReplacementData = null;
                 byte[] originalSerializedData = null;
 
+                DebugStr("[ASSET] Determining replacement type from extension.");
                 if (!string.Equals(Path.GetExtension(input_file), ".png", StringComparison.OrdinalIgnoreCase))
                 {
                     // Despite the name, "Find" also replaces stuff
@@ -91,6 +113,7 @@ namespace UAFGJ
                     rawReplacementData = atvf.WriteToByteArray();
                 }
 
+                DebugStr("[ASSET] Import phase returned; validating replacement state before write.");
                 if (afie == null || rawReplacementData == null || rawReplacementData.Length == 0)
                 {
                     DisplayStr("Invalid replacement state.");
@@ -108,7 +131,7 @@ namespace UAFGJ
 
                 string fakeName = tempAssetPath;
 
-                DebugStr("[ASSET] Writing replacement to temporary file: " + fakeName);
+                DebugStr($"[ASSET] Writing replacement to staging file '{fakeName}'.");
 
                 using (var stream = new FileStream(
                     fakeName,
@@ -125,6 +148,7 @@ namespace UAFGJ
                 }
 
                 // The original file is still held by AssetsTools until unload.
+                DebugStr("[ASSET] Staging write completed; releasing AssetsManager handles.");
                 am.UnloadAllAssetsFiles(true);
 
                 DebugStr("[ASSET] Handles released; replacing original file.");
@@ -134,6 +158,7 @@ namespace UAFGJ
             }
             catch (Exception ex)
             {
+                Environment.ExitCode = 1;
                 DisplayStr("[FATAL] Assets file handling failed: " + ex.GetType().Name + ": " + ex.Message);
                 DebugStr(ex.ToString());
             }
@@ -141,6 +166,36 @@ namespace UAFGJ
             {
                 try { am.UnloadAllAssetsFiles(true); } catch { }
                 DeleteFileIfExists(tempAssetPath);
+            }
+        }
+
+        private static void CleanupStaleAssetStages(string assetPath)
+        {
+            try
+            {
+                string directory = Path.GetDirectoryName(assetPath);
+                string fileName = Path.GetFileName(assetPath);
+
+                if (string.IsNullOrEmpty(directory) ||
+                    string.IsNullOrEmpty(fileName) ||
+                    !Directory.Exists(directory))
+                {
+                    return;
+                }
+
+                string pattern =
+                    fileName + ".uafgj_stage_*.tmp";
+
+                foreach (string path in Directory.GetFiles(directory, pattern))
+                {
+                    DeleteFileIfExists(path);
+                }
+            }
+            catch (Exception ex)
+            {
+                DebugStr(
+                    "[CLEANUP] Could not scan for stale asset staging files: " +
+                    ex.GetType().Name + ": " + ex.Message);
             }
         }
     }

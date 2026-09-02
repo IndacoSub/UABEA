@@ -4,11 +4,458 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using System.Linq;
+using System.Reflection;
+using AssetsTools.NET.Extra;
 
 namespace UAFGJ
 {
     partial class Program
     {
+        private static void LogPhase(string message)
+        {
+            DebugStr("[PHASE] " + message);
+        }
+
+        private static void LogException(string context, Exception ex)
+        {
+            DebugStr($"[ERROR] {context}: {ex.GetType().FullName}: {ex.Message}");
+            DebugStr(ex.ToString());
+        }
+
+        private static void LogFileState(string label, string path)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(path))
+                {
+                    DebugStr($"{label}: path=<empty>");
+                    return;
+                }
+
+                if (!File.Exists(path))
+                {
+                    DebugStr($"{label}: MISSING path='{path}'");
+                    return;
+                }
+
+                var info = new FileInfo(path);
+                DebugStr($"{label}: path='{path}', length={info.Length}, lastWriteUtc={info.LastWriteTimeUtc:O}, readOnly={info.IsReadOnly}");
+                DebugStr($"{label}: SHA256={Sha256File(path)}");
+            }
+            catch (Exception ex)
+            {
+                DebugStr($"[ERROR] Could not log file state '{path}': {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+
+
+        // ============================================================
+        // PATH / CLASS DATA / MONOBEHAVIOUR TEMPLATE SUPPORT
+        // ============================================================
+
+        private static string ResolveClassDataTpkPath()
+        {
+            string[] candidates =
+            {
+                Path.Combine(Environment.CurrentDirectory, "classdata.tpk"),
+                Path.Combine(AppContext.BaseDirectory, "classdata.tpk")
+            };
+
+            foreach (string candidate in candidates)
+            {
+                if (File.Exists(candidate))
+                {
+                    DebugStr(
+                        $"[CLASSDATA] Using classdata.tpk: '{candidate}'");
+                    return candidate;
+                }
+            }
+
+            DebugStr(
+                "[CLASSDATA] classdata.tpk not found in current or executable directory.");
+
+            return null;
+        }
+
+        private static string FindUnityDataDirectory(string inputPath)
+        {
+            try
+            {
+                string fullPath =
+                    Path.GetFullPath(
+                        inputPath.Replace('/', Path.DirectorySeparatorChar));
+
+                DirectoryInfo dir =
+                    new DirectoryInfo(
+                        Path.GetDirectoryName(fullPath));
+
+                while (dir != null)
+                {
+                    if (dir.Name.EndsWith(
+                        "_Data",
+                        StringComparison.OrdinalIgnoreCase))
+                    {
+                        return dir.FullName;
+                    }
+
+                    dir = dir.Parent;
+                }
+            }
+            catch (Exception ex)
+            {
+                DebugStr(
+                    $"[MONO] Could not determine Unity *_Data directory: " +
+                    $"{ex.GetType().Name}: {ex.Message}");
+            }
+
+            return null;
+        }
+
+        private static Type FindLoadedOrLoadType(
+            string assemblySimpleName,
+            params string[] fullTypeNames)
+        {
+            foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                foreach (string fullTypeName in fullTypeNames)
+                {
+                    Type loaded =
+                        assembly.GetType(
+                            fullTypeName,
+                            throwOnError: false,
+                            ignoreCase: false);
+
+                    if (loaded != null)
+                        return loaded;
+                }
+            }
+
+            try
+            {
+                Assembly assembly =
+                    Assembly.Load(
+                        new AssemblyName(
+                            assemblySimpleName));
+
+                foreach (string fullTypeName in fullTypeNames)
+                {
+                    Type loaded =
+                        assembly.GetType(
+                            fullTypeName,
+                            throwOnError: false,
+                            ignoreCase: false);
+
+                    if (loaded != null)
+                        return loaded;
+                }
+            }
+            catch (Exception ex)
+            {
+                DebugStr(
+                    $"[MONO] Optional assembly '{assemblySimpleName}' " +
+                    $"could not be loaded: {ex.GetType().Name}: {ex.Message}");
+            }
+
+            return null;
+        }
+
+        private static bool TrySetMonoTempGenerator(
+            AssetsManager am,
+            object generator,
+            string sourceDescription)
+        {
+            if (am == null || generator == null)
+                return false;
+
+            try
+            {
+                PropertyInfo prop =
+                    typeof(AssetsManager).GetProperty(
+                        "MonoTempGenerator",
+                        BindingFlags.Instance |
+                        BindingFlags.Public);
+
+                if (prop == null || !prop.CanWrite)
+                {
+                    DebugStr(
+                        "[MONO] AssetsManager.MonoTempGenerator is not writable in this AssetsTools.NET build.");
+
+                    return false;
+                }
+
+                if (!prop.PropertyType.IsInstanceOfType(generator))
+                {
+                    DebugStr(
+                        $"[MONO] Generator type '{generator.GetType().FullName}' " +
+                        $"is not assignable to '{prop.PropertyType.FullName}'.");
+                    return false;
+                }
+
+                prop.SetValue(
+                    am,
+                    generator);
+
+                DebugStr(
+                    $"[MONO] Configured MonoTempGenerator from {sourceDescription}.");
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                DebugStr(
+                    $"[MONO] Failed to configure MonoTempGenerator " +
+                    $"from {sourceDescription}: {ex.GetType().Name}: {ex.Message}");
+
+                DebugStr(ex.ToString());
+                return false;
+            }
+        }
+
+        private static bool TryConfigureMonoCecilGenerator(
+            AssetsManager am,
+            string managedDirectory)
+        {
+            if (!Directory.Exists(managedDirectory))
+                return false;
+
+            Type generatorType =
+                FindLoadedOrLoadType(
+                    "AssetsTools.NET.MonoCecil",
+                    "AssetsTools.NET.MonoCecil.MonoCecilTempGenerator");
+
+            if (generatorType == null)
+            {
+                DebugStr(
+                    "[MONO] AssetsTools.NET.MonoCecil is not available.");
+                return false;
+            }
+
+            try
+            {
+                ConstructorInfo ctor =
+                    generatorType.GetConstructor(
+                        new[] { typeof(string) });
+
+                if (ctor == null)
+                {
+                    DebugStr(
+                        "[MONO] MonoCecilTempGenerator(string) constructor not found.");
+                    return false;
+                }
+
+                object generator =
+                    ctor.Invoke(
+                        new object[] { managedDirectory });
+
+                return TrySetMonoTempGenerator(
+                    am,
+                    generator,
+                    $"MonoCecil managed directory '{managedDirectory}'");
+            }
+            catch (Exception ex)
+            {
+                DebugStr(
+                    $"[MONO] Failed creating MonoCecilTempGenerator: " +
+                    $"{ex.GetType().Name}: {ex.Message}");
+                DebugStr(ex.ToString());
+                return false;
+            }
+        }
+
+        private static bool TryConfigureCpp2IlGenerator(
+            AssetsManager am,
+            string unityDataDirectory)
+        {
+            if (!Directory.Exists(unityDataDirectory))
+                return false;
+
+            Type findType =
+                FindLoadedOrLoadType(
+                    "AssetsTools.NET.Cpp2IL",
+                    "AssetsTools.NET.Cpp2Il.FindCpp2IlFiles");
+
+            Type generatorType =
+                FindLoadedOrLoadType(
+                    "AssetsTools.NET.Cpp2IL",
+                    "AssetsTools.NET.Cpp2Il.Cpp2IlTempGenerator");
+
+            if (findType == null || generatorType == null)
+            {
+                DebugStr(
+                    "[IL2CPP] AssetsTools.NET.Cpp2IL is not available.");
+                return false;
+            }
+
+            try
+            {
+                MethodInfo findMethod =
+                    findType.GetMethod(
+                        "Find",
+                        BindingFlags.Public |
+                        BindingFlags.Static,
+                        binder: null,
+                        types: new[] { typeof(string) },
+                        modifiers: null);
+
+                if (findMethod == null)
+                {
+                    DebugStr(
+                        "[IL2CPP] FindCpp2IlFiles.Find(string) not found.");
+                    return false;
+                }
+
+                object result =
+                    findMethod.Invoke(
+                        null,
+                        new object[] { unityDataDirectory });
+
+                if (result == null)
+                {
+                    DebugStr(
+                        "[IL2CPP] FindCpp2IlFiles returned null.");
+                    return false;
+                }
+
+                Type resultType = result.GetType();
+
+                PropertyInfo successProp =
+                    resultType.GetProperty("success") ??
+                    resultType.GetProperty("Success");
+
+                bool success =
+                    successProp != null &&
+                    successProp.PropertyType == typeof(bool) &&
+                    (bool)successProp.GetValue(result);
+
+                if (!success)
+                {
+                    DebugStr(
+                        "[IL2CPP] Cpp2IL file discovery did not succeed.");
+                    return false;
+                }
+
+                string metaPath =
+                    (resultType.GetProperty("metaPath") ??
+                     resultType.GetProperty("MetaPath"))?
+                    .GetValue(result)?
+                    .ToString();
+
+                string asmPath =
+                    (resultType.GetProperty("asmPath") ??
+                     resultType.GetProperty("AsmPath"))?
+                    .GetValue(result)?
+                    .ToString();
+
+                if (string.IsNullOrWhiteSpace(metaPath) ||
+                    string.IsNullOrWhiteSpace(asmPath))
+                {
+                    DebugStr(
+                        "[IL2CPP] Cpp2IL discovery returned empty metadata/assembly path.");
+                    return false;
+                }
+
+                ConstructorInfo ctor =
+                    generatorType.GetConstructor(
+                        new[] { typeof(string), typeof(string) });
+
+                if (ctor == null)
+                {
+                    DebugStr(
+                        "[IL2CPP] Cpp2IlTempGenerator(string,string) constructor not found.");
+                    return false;
+                }
+
+                object generator =
+                    ctor.Invoke(
+                        new object[] { metaPath, asmPath });
+
+                return TrySetMonoTempGenerator(
+                    am,
+                    generator,
+                    $"Cpp2IL metadata='{metaPath}', assembly='{asmPath}'");
+            }
+            catch (Exception ex)
+            {
+                DebugStr(
+                    $"[IL2CPP] Failed creating Cpp2IlTempGenerator: " +
+                    $"{ex.GetType().Name}: {ex.Message}");
+                DebugStr(ex.ToString());
+                return false;
+            }
+        }
+
+        private static void ConfigureMonoBehaviourTemplateGenerator(
+            AssetsManager am,
+            string inputPath)
+        {
+            if (am == null)
+            {
+                DebugStr(
+                    "[MONO] AssetsManager is null; template generator cannot be configured.");
+                return;
+            }
+
+            string dataDirectory =
+                FindUnityDataDirectory(
+                    inputPath);
+
+            if (string.IsNullOrWhiteSpace(dataDirectory))
+            {
+                DebugStr(
+                    "[MONO] Could not find Unity *_Data directory from input path.");
+                return;
+            }
+
+            string managedDirectory =
+                Path.Combine(
+                    dataDirectory,
+                    "Managed");
+
+            DebugStr(
+                $"[MONO] Unity data directory='{dataDirectory}'");
+            DebugStr(
+                $"[MONO] Managed directory='{managedDirectory}'");
+
+            if (Directory.Exists(managedDirectory))
+            {
+                string[] dlls =
+                    Directory.GetFiles(
+                        managedDirectory,
+                        "*.dll",
+                        SearchOption.TopDirectoryOnly);
+
+                DebugStr(
+                    $"[MONO] Managed DLL count={dlls.Length}");
+
+                if (dlls.Length > 0 &&
+                    TryConfigureMonoCecilGenerator(
+                        am,
+                        managedDirectory))
+                {
+                    DebugStr(
+                        "[MONO] MonoCecil template generator enabled.");
+                    return;
+                }
+            }
+
+            DebugStr(
+                "[MONO] Mono DLL template generation not available; trying IL2CPP.");
+
+            if (TryConfigureCpp2IlGenerator(
+                am,
+                dataDirectory))
+            {
+                DebugStr(
+                    "[IL2CPP] Cpp2IL template generator enabled.");
+                return;
+            }
+
+            DebugStr(
+                "[MONO] No automatic MonoBehaviour template generator configured. " +
+                "Built-in classdata.tpk support remains available.");
+        }
+
         private static bool StartsWithSpace(string str, string value)
         {
             return str.StartsWith(
@@ -220,34 +667,239 @@ namespace UAFGJ
             public string Type = "";
             public string FieldName = "";
             public string Value = "";
+            public string Path = "";
         }
 
-        private static List<AssetsTools.NET.AssetTypeValueField> CollectScalarFields(
-            AssetsTools.NET.AssetTypeValueField field)
+        private sealed class ScalarFieldEntry
         {
-            var result =
-                new List<AssetsTools.NET.AssetTypeValueField>();
+            public string Path = "";
+            public string Type = "";
+            public string FieldName = "";
+            public AssetTypeValueField Field = null;
+        }
 
-            CollectScalarFieldsRecursive(
-                field,
-                result);
+        private sealed class DumpTargetMatch
+        {
+            public DumpScalar Dump = null;
+            public ScalarFieldEntry Target = null;
+        }
+
+        private static string ParseDumpNodeName(string left, out string type)
+        {
+            left = left.Trim();
+
+            if (string.IsNullOrEmpty(left))
+            {
+                type = "";
+                return "";
+            }
+
+            // Array nodes are printed as: "Array Array (N items)".
+            if (left.StartsWith("Array Array", StringComparison.Ordinal))
+            {
+                type = "Array";
+                return "Array";
+            }
+
+            int split = left.LastIndexOf(' ');
+
+            if (split <= 0 || split >= left.Length - 1)
+            {
+                type = "";
+                return left;
+            }
+
+            type = left.Substring(0, split).Trim();
+            return left.Substring(split + 1).Trim();
+        }
+
+        private static List<DumpScalar> ReadDumpScalars(
+            string inputFile)
+        {
+            var result = new List<DumpScalar>();
+
+            // One node name per indentation depth.
+            var stack = new List<string>();
+            var stackIsArray = new List<bool>();
+            var arrayItemCounters = new List<int>();
+
+            using (var reader = new StreamReader(inputFile, Encoding.UTF8, true))
+            {
+                int lineNumber = 0;
+
+                while (true)
+                {
+                    string line = reader.ReadLine();
+                    if (line == null)
+                        break;
+
+                    lineNumber++;
+
+                    if (string.IsNullOrWhiteSpace(line))
+                        continue;
+
+                    int depth = LeadingSpaces(line);
+                    if (depth >= line.Length || line[depth] == '[')
+                        continue;
+
+                    string payload = line.Substring(depth).TrimStart();
+                    int firstSpace = payload.IndexOf(' ');
+                    if (firstSpace <= 0)
+                        continue;
+
+                    payload = payload.Substring(firstSpace + 1).TrimStart();
+                    if (payload.Length == 0)
+                        continue;
+
+                    int eq = payload.IndexOf('=');
+                    string left = eq >= 0 ? payload.Substring(0, eq).Trim() : payload;
+                    if (left.Length == 0)
+                        continue;
+
+                    string type;
+                    string fieldName = ParseDumpNodeName(left, out type);
+                    if (string.IsNullOrEmpty(fieldName))
+                        continue;
+
+                    while (stack.Count > depth)
+                    {
+                        stack.RemoveAt(stack.Count - 1);
+                        stackIsArray.RemoveAt(stackIsArray.Count - 1);
+                        arrayItemCounters.RemoveAt(arrayItemCounters.Count - 1);
+                    }
+
+                    while (stack.Count < depth)
+                    {
+                        stack.Add("<anonymous>");
+                        stackIsArray.Add(false);
+                        arrayItemCounters.Add(0);
+                    }
+
+                    bool parentIsArray = depth > 0 &&
+                                         depth - 1 < stackIsArray.Count &&
+                                         stackIsArray[depth - 1];
+
+                    bool isScalar = eq >= 0;
+
+                    // The depth-0 line is the dump root (for example
+                    // "MonoBehaviour Base"). The AssetsTools.NET BaseField
+                    // traversal below starts at its children, so the root
+                    // itself must not become part of the scalar path.
+                    if (!isScalar && depth == 0)
+                    {
+                        stack.Clear();
+                        stackIsArray.Clear();
+                        arrayItemCounters.Clear();
+                        continue;
+                    }
+
+                    if (!isScalar)
+                    {
+                        string nodeName = fieldName;
+
+                        // For an element inside an Array, preserve the item
+                        // ordinal in the structural path. This prevents two
+                        // otherwise identical fields in different array
+                        // elements from collapsing to the same path.
+                        if (parentIsArray)
+                        {
+                            int idx = arrayItemCounters[depth - 1]++;
+                            nodeName += "[" + idx + "]";
+                        }
+
+                        if (stack.Count == depth)
+                        {
+                            stack.Add(nodeName);
+                            stackIsArray.Add(
+                                string.Equals(type, "Array", StringComparison.Ordinal));
+                            arrayItemCounters.Add(0);
+                        }
+                        else
+                        {
+                            stack[depth] = nodeName;
+                            stackIsArray[depth] =
+                                string.Equals(type, "Array", StringComparison.Ordinal);
+                            arrayItemCounters[depth] = 0;
+                        }
+
+                        continue;
+                    }
+
+                    string value = payload.Substring(eq + 1).Trim();
+
+                    // m_Array.size describes container size, not a scalar
+                    // field of the serialized object. Ignore it.
+                    if (string.Equals(fieldName, "size", StringComparison.Ordinal))
+                        continue;
+
+                    var pathParts = new List<string>();
+                    for (int i = 0; i < stack.Count; i++)
+                    {
+                        if (stack[i] == "<anonymous>")
+                            continue;
+                        pathParts.Add(stack[i]);
+                    }
+
+                    if (parentIsArray)
+                    {
+                        int idx = arrayItemCounters[depth - 1]++;
+                        if (pathParts.Count > 0)
+                            pathParts[pathParts.Count - 1] =
+                                pathParts[pathParts.Count - 1] + "[" + idx + "]";
+                    }
+
+                    pathParts.Add(fieldName);
+
+                    result.Add(new DumpScalar
+                    {
+                        LineNumber = lineNumber,
+                        Type = type,
+                        FieldName = fieldName,
+                        Value = value,
+                        Path = string.Join("/", pathParts)
+                    });
+                }
+            }
 
             return result;
         }
 
-        private static void CollectScalarFieldsRecursive(
-            AssetsTools.NET.AssetTypeValueField field,
-            List<AssetsTools.NET.AssetTypeValueField> result)
+        private static void CollectScalarFieldEntriesRecursive(
+            AssetTypeValueField field,
+            string parentPath,
+            List<ScalarFieldEntry> result)
         {
             if (field == null || field.IsDummy)
                 return;
+
+            string fieldName = field.TemplateField?.Name ?? "<unnamed>";
+            string currentPath = string.IsNullOrEmpty(parentPath)
+                ? fieldName
+                : parentPath + "/" + fieldName;
+
+            if (field.Value != null && field.Value.ValueType == AssetValueType.Array)
+            {
+                if (field.Children != null)
+                {
+                    for (int i = 0; i < field.Children.Count; i++)
+                    {
+                        CollectScalarFieldEntriesRecursive(
+                            field.Children[i],
+                            currentPath + "[" + i + "]",
+                            result);
+                    }
+                }
+
+                return;
+            }
 
             if (field.Children != null && field.Children.Count > 0)
             {
                 foreach (var child in field.Children)
                 {
-                    CollectScalarFieldsRecursive(
+                    CollectScalarFieldEntriesRecursive(
                         child,
+                        currentPath,
                         result);
                 }
 
@@ -263,86 +915,102 @@ namespace UAFGJ
                 return;
             }
 
-            result.Add(field);
+            result.Add(new ScalarFieldEntry
+            {
+                Path = currentPath,
+                Type = RuntimeTypeToDumpType(field.Value.ValueType),
+                FieldName = fieldName,
+                Field = field
+            });
         }
 
-        private static List<DumpScalar> ReadDumpScalars(
-            string inputFile)
+        private static List<ScalarFieldEntry> CollectScalarFieldEntries(
+            AssetTypeValueField baseField)
         {
-            var result = new List<DumpScalar>();
+            var result = new List<ScalarFieldEntry>();
 
-            using (var reader =
-                new StreamReader(
-                    inputFile,
-                    Encoding.UTF8,
-                    true))
+            if (baseField?.Children != null)
             {
-                int lineNumber = 0;
-
-                while (true)
+                foreach (var child in baseField.Children)
                 {
-                    string line = reader.ReadLine();
-
-                    if (line == null)
-                        break;
-
-                    lineNumber++;
-
-                    if (string.IsNullOrWhiteSpace(line))
-                        continue;
-
-                    int depth = LeadingSpaces(line);
-
-                    if (depth >= line.Length || line[depth] == '[')
-                        continue;
-
-                    int eq = line.IndexOf('=');
-
-                    if (eq < 0)
-                        continue;
-
-                    if (depth + 2 >= eq)
-                        continue;
-
-                    string left =
-                        line.Substring(
-                            depth + 2,
-                            eq - (depth + 2)).Trim();
-
-                    string value =
-                        line.Substring(eq + 1).Trim();
-
-                    int split = left.IndexOf(' ');
-
-                    if (split <= 0)
-                        continue;
-
-                    string type =
-                        left.Substring(0, split).Trim();
-
-                    string fieldName =
-                        left.Substring(split + 1).Trim();
-
-                    if (string.Equals(
-                        fieldName,
-                        "size",
-                        StringComparison.Ordinal))
-                    {
-                        continue;
-                    }
-
-                    result.Add(
-                        new DumpScalar
-                        {
-                            LineNumber = lineNumber,
-                            Type = type,
-                            FieldName = fieldName,
-                            Value = value
-                        });
+                    CollectScalarFieldEntriesRecursive(child, "", result);
                 }
             }
 
             return result;
+        }
+
+        private static List<DumpTargetMatch> BuildDumpTargetMatches(
+            string inputFile,
+            AssetTypeValueField baseField,
+            bool requireExactTargetCount)
+        {
+            var dumpScalars = ReadDumpScalars(inputFile);
+            var targetEntries = CollectScalarFieldEntries(baseField);
+
+            DebugStr(
+                $"[TXT] Structural mapping: dump scalar count={dumpScalars.Count}; " +
+                $"target scalar count={targetEntries.Count}");
+
+            var targetByPath = new Dictionary<string, ScalarFieldEntry>(StringComparer.Ordinal);
+            foreach (var target in targetEntries)
+            {
+                if (!targetByPath.TryAdd(target.Path, target))
+                {
+                    throw new InvalidDataException(
+                        $"Duplicate target scalar path '{target.Path}'.");
+                }
+            }
+
+            var matches = new List<DumpTargetMatch>(dumpScalars.Count);
+            var usedPaths = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var dump in dumpScalars)
+            {
+                if (!targetByPath.TryGetValue(dump.Path, out var target))
+                {
+                    throw new InvalidDataException(
+                        $"FULL structural mapping failed at dump line {dump.LineNumber}: " +
+                        $"'{dump.Type} {dump.FieldName}' path='{dump.Path}' has no matching target field.");
+                }
+
+                if (!string.Equals(dump.Type, target.Type, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidDataException(
+                        $"FULL type mismatch at dump line {dump.LineNumber}: " +
+                        $"path='{dump.Path}', dump='{dump.Type}', target='{target.Type}'.");
+                }
+
+                if (!usedPaths.Add(dump.Path))
+                {
+                    throw new InvalidDataException(
+                        $"Duplicate dump scalar path '{dump.Path}' at line {dump.LineNumber}.");
+                }
+
+                matches.Add(new DumpTargetMatch
+                {
+                    Dump = dump,
+                    Target = target
+                });
+            }
+
+            if (requireExactTargetCount && dumpScalars.Count != targetEntries.Count)
+            {
+                throw new InvalidDataException(
+                    $"FULL checked mapping count mismatch: dump={dumpScalars.Count}, target={targetEntries.Count}.");
+            }
+
+            if (!requireExactTargetCount)
+            {
+                int extras = targetEntries.Count - usedPaths.Count;
+                if (extras > 0)
+                {
+                    DebugStr(
+                        $"[TXT] FULL structural mapping: {extras} target scalar(s) are not present in the dump; they will remain unchanged.");
+                }
+            }
+
+            return matches;
         }
 
         private static string RuntimeTypeToDumpType(
@@ -500,81 +1168,34 @@ namespace UAFGJ
             AssetsTools.NET.AssetTypeValueField baseField)
         {
             DebugStr(
-                "[TXT] Applying dump to existing AssetsTools.NET.AssetTypeValueField; " +
-                "Unity serialization will be handled by AssetsTools.NET.");
+                "[TXT] Applying FULL checked dump with structural preflight.");
 
-            var dumpScalars =
-                ReadDumpScalars(inputFile);
-
-            var targetScalars =
-                CollectScalarFields(baseField);
+            var matches = BuildDumpTargetMatches(
+                inputFile,
+                baseField,
+                true);
 
             DebugStr(
-                $"[TXT] Dump scalar count: {dumpScalars.Count}; " +
-                $"target scalar count: {targetScalars.Count}.");
+                $"[TXT] FULL checked structural preflight passed for {matches.Count} fields. Applying values now.");
 
-            if (dumpScalars.Count != targetScalars.Count)
+            foreach (var match in matches)
             {
-                throw new InvalidDataException(
-                    $"Dump/tree scalar count mismatch: " +
-                    $"dump={dumpScalars.Count}, " +
-                    $"target={targetScalars.Count}. " +
-                    "Refusing to write.");
-            }
-
-            for (int i = 0; i < dumpScalars.Count; i++)
-            {
-                var dump = dumpScalars[i];
-                var target = targetScalars[i];
-
-                string targetName =
-                    target.TemplateField?.Name ?? "<unnamed>";
-
-                string targetType =
-                    target.Value == null
-                        ? "<null>"
-                        : RuntimeTypeToDumpType(
-                            target.Value.ValueType);
-
-                if (!string.Equals(
-                    dump.FieldName,
-                    targetName,
-                    StringComparison.Ordinal))
+                try
+                {
+                    ApplyDumpValue(match.Target.Field, match.Dump);
+                }
+                catch (Exception ex)
                 {
                     throw new InvalidDataException(
-                        $"Field name/order mismatch at scalar #{i + 1}: " +
-                        $"dump='{dump.FieldName}', " +
-                        $"target='{targetName}'.");
-                }
-
-                if (!string.Equals(
-                    dump.Type,
-                    targetType,
-                    StringComparison.OrdinalIgnoreCase))
-                {
-                    throw new InvalidDataException(
-                        $"Field type mismatch at scalar #{i + 1} '{targetName}': " +
-                        $"dump='{dump.Type}', " +
-                        $"target='{targetType}'.");
-                }
-
-                ApplyDumpValue(target, dump);
-
-                if (i < 8 || i == dumpScalars.Count - 1)
-                {
-                    DebugStr(
-                        $"[TXT] Applied #{i + 1}: " +
-                        $"{targetName} ({target.Value.ValueType})");
+                        $"Unable to apply checked FULL field path='{match.Dump.Path}', line={match.Dump.LineNumber}.",
+                        ex);
                 }
             }
 
-            byte[] data =
-                baseField.WriteToByteArray();
+            byte[] data = baseField.WriteToByteArray();
 
             DebugStr(
-                $"[TXT] BaseField reserialized: " +
-                $"{data.Length} bytes " +
-                $"SHA256={Sha256Hex(data)}");
+                $"[TXT] BaseField reserialized: {data.Length} bytes SHA256={Sha256Hex(data)}");
 
             return data;
         }
@@ -655,161 +1276,57 @@ namespace UAFGJ
             string inputFile,
             AssetsTools.NET.AssetTypeValueField baseField)
         {
-            var dumpScalars =
-                ReadDumpScalars(inputFile);
+            var matches = BuildDumpTargetMatches(
+                inputFile,
+                baseField,
+                true);
 
-            var targetScalars =
-                CollectScalarFields(baseField);
+            DebugStr(
+                $"[CHECK] FINAL dump structural mapping passed: {matches.Count} fields.");
 
-            if (dumpScalars.Count != targetScalars.Count)
+            foreach (var match in matches)
             {
-                throw new InvalidDataException(
-                    $"FINAL CHECK: dump/tree scalar count mismatch: " +
-                    $"dump={dumpScalars.Count}, " +
-                    $"target={targetScalars.Count}");
-            }
+                var dump = match.Dump;
+                var target = match.Target.Field;
+                string targetName = match.Target.FieldName;
 
-            for (int i = 0; i < dumpScalars.Count; i++)
-            {
-                var dump = dumpScalars[i];
-                var target = targetScalars[i];
-
-                string targetName =
-                    target.TemplateField?.Name ?? "<unnamed>";
-
-                string targetType =
-                    RuntimeTypeToDumpType(
-                        target.Value.ValueType);
-
-                if (!string.Equals(
-                    dump.FieldName,
-                    targetName,
-                    StringComparison.Ordinal) ||
-                    !string.Equals(
-                        dump.Type,
-                        targetType,
-                        StringComparison.OrdinalIgnoreCase))
+                if (target.Value.ValueType == AssetValueType.String)
                 {
-                    throw new InvalidDataException(
-                        $"FINAL CHECK: field #{i + 1} mismatch " +
-                        $"dump='{dump.Type} {dump.FieldName}' " +
-                        $"target='{targetType} {targetName}'.");
-                }
-
-                // ----------------------------------------------------
-                // Strings
-                // ----------------------------------------------------
-
-                if (target.Value.ValueType ==
-                    AssetValueType.String)
-                {
-                    string expectedString =
-                        ParseDumpString(
-                            dump.Value);
-
-                    string actualString =
-                        target.AsString ?? "";
-
-                    if (!string.Equals(
-                        expectedString,
-                        actualString,
-                        StringComparison.Ordinal))
+                    string expectedString = ParseDumpString(dump.Value);
+                    string actualString = target.AsString ?? "";
+                    if (!string.Equals(expectedString, actualString, StringComparison.Ordinal))
                     {
                         throw new InvalidDataException(
-                            $"FINAL CHECK: string mismatch at '{targetName}': " +
-                            $"dumpLength={expectedString?.Length ?? 0}, " +
-                            $"actualLength={actualString?.Length ?? 0}.");
+                            $"FINAL CHECK: string mismatch at '{dump.Path}': expectedLength={expectedString.Length}, actualLength={actualString.Length}.");
                     }
-
                     continue;
                 }
 
-                // ----------------------------------------------------
-                // Float
-                // ----------------------------------------------------
-
-                if (target.Value.ValueType ==
-                    AssetValueType.Float)
+                if (target.Value.ValueType == AssetValueType.Float)
                 {
-                    float expectedFloat =
-                        ParseSingle(
-                            dump.Value);
-
-                    float actualFloat =
-                        target.AsFloat;
-
-                    if (!AreFloatsEqual(
-                        expectedFloat,
-                        actualFloat))
+                    float expectedFloat = ParseSingle(dump.Value);
+                    if (!AreFloatsEqual(expectedFloat, target.AsFloat))
                     {
-                        string expectedText =
-                            expectedFloat.ToString(
-                                "R",
-                                CultureInfo.InvariantCulture);
-
-                        string actualText =
-                            actualFloat.ToString(
-                                "R",
-                                CultureInfo.InvariantCulture);
-
                         throw new InvalidDataException(
-                            $"FINAL CHECK: float mismatch at '{targetName}': " +
-                            $"dump='{dump.Value}' " +
-                            $"parsedExpected='{expectedText}' " +
-                            $"actual='{actualText}'.");
+                            $"FINAL CHECK: float mismatch at '{dump.Path}': dump='{dump.Value}' actual='{target.AsFloat.ToString("R", CultureInfo.InvariantCulture)}'.");
                     }
-
                     continue;
                 }
 
-                // ----------------------------------------------------
-                // Double
-                // ----------------------------------------------------
-
-                if (target.Value.ValueType ==
-                    AssetValueType.Double)
+                if (target.Value.ValueType == AssetValueType.Double)
                 {
-                    double expectedDouble =
-                        ParseDouble(
-                            dump.Value);
-
-                    double actualDouble =
-                        target.AsDouble;
-
-                    if (!AreDoublesEqual(
-                        expectedDouble,
-                        actualDouble))
+                    double expectedDouble = ParseDouble(dump.Value);
+                    if (!AreDoublesEqual(expectedDouble, target.AsDouble))
                     {
-                        string expectedText =
-                            expectedDouble.ToString(
-                                "R",
-                                CultureInfo.InvariantCulture);
-
-                        string actualText =
-                            actualDouble.ToString(
-                                "R",
-                                CultureInfo.InvariantCulture);
-
                         throw new InvalidDataException(
-                            $"FINAL CHECK: double mismatch at '{targetName}': " +
-                            $"dump='{dump.Value}' " +
-                            $"parsedExpected='{expectedText}' " +
-                            $"actual='{actualText}'.");
+                            $"FINAL CHECK: double mismatch at '{dump.Path}': dump='{dump.Value}' actual='{target.AsDouble.ToString("R", CultureInfo.InvariantCulture)}'.");
                     }
-
                     continue;
                 }
 
-                // ----------------------------------------------------
-                // Other scalar types
-                // ----------------------------------------------------
+                string actualValue = ReadFieldAsDumpValue(target);
 
-                string actualValue =
-                    ReadFieldAsDumpValue(
-                        target);
-
-                if (
-                    target.Value.ValueType == AssetValueType.UInt8 ||
+                if (target.Value.ValueType == AssetValueType.UInt8 ||
                     target.Value.ValueType == AssetValueType.Int8 ||
                     target.Value.ValueType == AssetValueType.UInt16 ||
                     target.Value.ValueType == AssetValueType.Int16 ||
@@ -818,34 +1335,19 @@ namespace UAFGJ
                     target.Value.ValueType == AssetValueType.UInt64 ||
                     target.Value.ValueType == AssetValueType.Int64)
                 {
-                    string normalizedDump =
-                        NormalizeNumericLiteral(
-                            dump.Value);
+                    string normalizedDump = NormalizeNumericLiteral(dump.Value);
+                    string normalizedActual = NormalizeNumericLiteral(actualValue);
 
-                    string normalizedActual =
-                        NormalizeNumericLiteral(
-                            actualValue);
-
-                    if (!string.Equals(
-                        normalizedDump,
-                        normalizedActual,
-                        StringComparison.Ordinal))
+                    if (!string.Equals(normalizedDump, normalizedActual, StringComparison.Ordinal))
                     {
                         throw new InvalidDataException(
-                            $"FINAL CHECK: numeric mismatch at '{targetName}': " +
-                            $"dump='{dump.Value}' " +
-                            $"actual='{actualValue}'.");
+                            $"FINAL CHECK: numeric mismatch at '{dump.Path}': dump='{dump.Value}' actual='{actualValue}'.");
                     }
                 }
-                else if (!string.Equals(
-                    actualValue,
-                    dump.Value,
-                    StringComparison.Ordinal))
+                else if (!string.Equals(actualValue, dump.Value, StringComparison.Ordinal))
                 {
                     throw new InvalidDataException(
-                        $"FINAL CHECK: value mismatch at '{targetName}': " +
-                        $"dump='{dump.Value}' " +
-                        $"actual='{actualValue}'.");
+                        $"FINAL CHECK: value mismatch at '{dump.Path}': dump='{dump.Value}' actual='{actualValue}'.");
                 }
             }
         }
