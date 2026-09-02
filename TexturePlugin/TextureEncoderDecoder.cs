@@ -554,5 +554,85 @@ namespace TexturePlugin
 
             return rawDataStream.ToArray();
         }
-    }
+
+		public static byte[] EncodeLegacy(byte[] data, int width, int height, TextureFormat format, int quality = 5, int mips = 1)
+		{
+			switch (format)
+			{
+				//crunch
+				case TextureFormat.DXT1Crunched:
+				case TextureFormat.DXT5Crunched:
+				case TextureFormat.ETC_RGB4Crunched:
+				case TextureFormat.ETC2_RGBA8Crunched:
+					{
+						byte[] res = EncodeCrunch(data, width, height, format, quality, mips);
+						return res;
+					}
+				//pvrtexlib
+				case TextureFormat.ARGB32:
+				//case TextureFormat.BGRA32New:
+				case TextureFormat.RGBA32:
+				case TextureFormat.RGB24:
+				case TextureFormat.ARGB4444:
+				case TextureFormat.RGBA4444:
+				case TextureFormat.RGB565:
+				case TextureFormat.Alpha8:
+				case TextureFormat.R8:
+				case TextureFormat.R16:
+				case TextureFormat.RG16:
+				case TextureFormat.RHalf:
+				case TextureFormat.RGHalf:
+				case TextureFormat.RGBAHalf:
+				case TextureFormat.RFloat:
+				case TextureFormat.RGFloat:
+				case TextureFormat.RGBAFloat:
+				/////////////////////////////////
+				//case TextureFormat.YUV2: //looks like this should be YUY2 and the api has a typo
+				case TextureFormat.EAC_R:
+				case TextureFormat.EAC_R_SIGNED:
+				case TextureFormat.EAC_RG:
+				case TextureFormat.EAC_RG_SIGNED:
+				case TextureFormat.ETC_RGB4:
+				case TextureFormat.ETC_RGB4_3DS:
+				case TextureFormat.ETC_RGBA8_3DS:
+				case TextureFormat.ETC2_RGB4:
+				case TextureFormat.ETC2_RGBA1:
+				case TextureFormat.ETC2_RGBA8:
+				case TextureFormat.PVRTC_RGB2:
+				case TextureFormat.PVRTC_RGBA2:
+				case TextureFormat.PVRTC_RGB4:
+				case TextureFormat.PVRTC_RGBA4:
+				case TextureFormat.ASTC_RGB_4x4:
+				case TextureFormat.ASTC_RGB_5x5:
+				case TextureFormat.ASTC_RGB_6x6:
+				case TextureFormat.ASTC_RGB_8x8:
+				case TextureFormat.ASTC_RGB_10x10:
+				case TextureFormat.ASTC_RGB_12x12:
+				case TextureFormat.ASTC_RGBA_4x4:
+				case TextureFormat.ASTC_RGBA_5x5:
+				case TextureFormat.ASTC_RGBA_8x8:
+				case TextureFormat.ASTC_RGBA_10x10:
+				case TextureFormat.ASTC_RGBA_12x12:
+					{
+						byte[] res = EncodePVRTexLib(data, width, height, format, quality);
+						return res;
+					}
+				case TextureFormat.DXT1:
+				case TextureFormat.DXT5:
+				case TextureFormat.BC7:
+					{
+						byte[] res = EncodeISPC(data, width, height, format, quality);
+						return res;
+					}
+				case TextureFormat.BC6H: //pls don't use
+				case TextureFormat.BC4:
+				case TextureFormat.BC5:
+					return null;
+				case TextureFormat.RGB9e5Float: //pls don't use
+					return null;
+				default:
+					return null;
+			}
+		}
+	}
 }

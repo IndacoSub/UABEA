@@ -15,7 +15,35 @@ namespace TexturePlugin
 {
     public class TextureImportExport
     {
-        public static byte[] Import(
+
+		public static byte[] ImportNX(string file, TextureFormat format, bool resize, int original_width, int original_height, out int width, out int height)
+		{
+			byte[] decData;
+            Image<Rgba32> image = null;
+
+			using (image = Image.Load<Rgba32>(file))
+			{
+				width = image.Width;
+				height = image.Height;
+
+				if (resize && (original_width != width || original_height != height) && original_height != 0 && original_width != 0)
+				{
+					image.Mutate(i => i.Resize(original_width, original_height));
+					width = original_width;
+					height = original_height;
+				}
+
+				image.Mutate(i => i.Flip(FlipMode.Vertical));
+
+				decData = new byte[width * height * 4];
+				image.CopyPixelDataTo(decData);
+			}
+
+			byte[] encData = TextureEncoderDecoder.EncodeLegacy(decData, width, height, format, 5);
+			return encData;
+		}
+
+		public static byte[] Import(
             string imagePath, TextureFormat format,
             out int width, out int height, ref int mips,
             uint platform = 0, byte[] platformBlob = null)
@@ -155,9 +183,8 @@ namespace TexturePlugin
                     image.SaveAsPng(path);
                     break;
                 case ".tga":
-                    var encoder = new TgaEncoder();
-                    encoder.BitsPerPixel = TgaBitsPerPixel.Pixel32;
-                    image.SaveAsTga(path, encoder);
+					var encoder = new TgaEncoder() { BitsPerPixel = TgaBitsPerPixel.Pixel32 };
+					image.SaveAsTga(path, encoder);
                     break;
             }
         }

@@ -42,7 +42,7 @@ namespace UABEAvalonia
             AppDomain currentDomain = AppDomain.CurrentDomain;
             currentDomain.UnhandledException += new UnhandledExceptionEventHandler(UABEAExceptionHandler);
 
-            if (args.Length > 0)
+            if (args.Length > 0 || false)
             {
                 CommandLineHandler.CLHMain(args);
             }
